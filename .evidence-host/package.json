@@ -1,0 +1,15 @@
+{
+	"name": "arhen-pi-pr-4-evidence",
+	"private": true,
+	"version": "0.0.0",
+	"description": "Temporary host for PR evidence images. Expires 2026-11-16.",
+	"main": "src/index.ts",
+	"scripts": {
+		"deploy": "wrangler deploy",
+		"dev": "wrangler dev",
+		"retire": "wrangler delete arhen-pi-pr-4-evidence"
+	},
+	"devDependencies": {
+		"wrangler": "^4.131.1"
+	}
+}

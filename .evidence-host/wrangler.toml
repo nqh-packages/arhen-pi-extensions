@@ -1,0 +1,19 @@
+#:schema node_modules/wrangler/config-schema.json
+name = "arhen-pi-pr-4-evidence"
+main = "src/index.ts"
+compatibility_date = "2026-09-17"
+
+[[rules]]
+type = "Data"
+globs = ["**/*.webp"]
+fallthrough = true
+
+[triggers]
+# Daily check. The cron does not delete anything; it only logs once the
+# deadline passes so the expiry is visible in `wrangler tail`. Removal is
+# handled by the scheduled `retire-evidence-host` workflow.
+crons = ["17 4 * * *"]
+
+# Temporary evidence host for arhen/pi-extensions PR #4.
+# Expires 2026-11-16 (see EXPIRES_AT in src/index.ts). No storage backend.
+# Delete with: npm run retire  (or `wrangler delete arhen-pi-pr-4-evidence`)

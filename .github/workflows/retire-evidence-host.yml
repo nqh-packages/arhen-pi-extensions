@@ -1,0 +1,85 @@
+name: retire-evidence-host
+
+# Removes the temporary evidence host used by the pull request that documents
+# child-to-leader delivery. The Worker expires itself in code on 2026-11-16 and
+# then serves 410, but it keeps existing until it is deleted.
+#
+# This workflow is the deletion path. It is scheduled, and it can also be run by
+# hand from the Actions tab at any time (for example as soon as the PR closes).
+#
+# Requires a repository secret CLOUDFLARE_API_TOKEN with Workers Scripts:Edit on
+# the target account, and CLOUDFLARE_ACCOUNT_ID.
+#
+# Fully remove this workflow once the evidence host is gone.
+
+on:
+  schedule:
+    # Runs daily. Deletes only after the Worker's own expiry date, so leaving it
+    # scheduled is harmless in the meantime.
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Delete now, ignoring the expiry date"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  retire:
+    runs-on: ubuntu-latest
+    env:
+      WORKER_NAME: arhen-pi-pr-4-evidence
+      EXPIRES_AT: "2026-11-16T22:16:21Z"
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - name: Check whether the evidence host is due for removal
+        id: due
+        run: |
+          if [ "${{ inputs.force }}" = "true" ]; then
+            echo "due=true" >> "$GITHUB_OUTPUT"
+            echo "Forced deletion requested."
+          elif [ "$(date -u +%s)" -ge "$(date -u -d "$EXPIRES_AT" +%s)" ]; then
+            echo "due=true" >> "$GITHUB_OUTPUT"
+            echo "Past $EXPIRES_AT, evidence host is due for removal."
+          else
+            echo "due=false" >> "$GITHUB_OUTPUT"
+            echo "Not yet due. Expires $EXPIRES_AT."
+          fi
+
+      - name: Confirm credentials are configured
+        if: steps.due.outputs.due == 'true'
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID must be set as repository secrets."
+            exit 1
+          fi
+
+      - name: Delete the evidence host
+        if: steps.due.outputs.due == 'true'
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -o pipefail
+          status=$(curl -sS -o /tmp/resp.txt -w '%{http_code}' \
+            -X DELETE \
+            "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT}/workers/scripts/${WORKER_NAME}" \
+            -H "Authorization: Bearer ${CF_TOKEN}")
+
+          case "$status" in
+            200) echo "Deleted ${WORKER_NAME}." ;;
+            404) echo "${WORKER_NAME} does not exist. Nothing to delete." ;;
+            *)   echo "::error::Delete failed with HTTP ${status}."
+                 cat /tmp/resp.txt
+                 exit 1 ;;
+          esac
+
+      - name: Note
+        if: steps.due.outputs.due == 'true'
+        run: |
+          echo "::notice::${WORKER_NAME} has been retired. Remove this workflow and the" \
+                "hosted evidence image reference from the pull request description."
