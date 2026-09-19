@@ -46,3 +46,10 @@ command across the monorepo.
   `{ isError: false }` for any `execute` that does not throw, discarding a returned `isError: true`.
 - Every subagent task must name a `model`; there is no default. The error names passable
   references. Keep it that way — an inherited session model makes "which model ran" unknowable.
+- `subagent_models` is scoped to `ctx.scopedModels` (pi's resolution of `enabledModels` and
+  `--models`), falling back to all available only when nothing is scoped; each entry carries pi's
+  own per-Mtok cost. Do not widen it to `getAvailable()` — that offers models the session cannot use.
+- **This extension is loaded into the running pi session, so edits here do not affect the session
+  that made them.** An in-session `subagent_models` call returns the copy loaded at startup. Verify
+  a change in a NEW process (`pi -t subagent_models --print ...`), or it will look like the edit did
+  nothing.
