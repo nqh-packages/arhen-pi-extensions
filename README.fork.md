@@ -73,14 +73,31 @@ The dev clone is safe to check out anything:
 
     ~/Desktop/CODES/arhen-pi-extensions-dev
 
-Both remotes are configured there (`origin` = arhen upstream,
-`nqh-packages` = fork).
+## Remotes
+
+Both remotes are configured in **this checkout and the dev clone**:
+
+| Remote | Repository | Role |
+|---|---|---|
+| `origin` | `arhen/pi-extensions` | upstream — read-only from here |
+| `nqh-packages` | `nqh-packages/arhen-pi-extensions` | the fork |
+
+`main` tracks **`nqh-packages/main`**, so `git push` publishes to the fork and never to upstream.
+Contributing upstream is a separate, deliberate step.
+
+A plain `git fetch` refreshes `origin` (upstream), not the fork, so `origin/main` lags by design and
+looking at it right after a push reads as a failed push. Check the remote you actually pushed to:
+
+```sh
+git ls-remote nqh-packages main   # what the fork has
+git ls-remote origin main         # what upstream has
+```
 
 ## Branches
 
 | Branch | Purpose |
 |---|---|
-| `main` | Contains the fix. **Keep checked out here.** Tracks upstream plus the fork commit. |
+| `main` | Contains the fix. **Keep checked out here.** Tracks `nqh-packages/main`. |
 | `fix/steer-all-child-leader-messages` | The PR head. Same commit as `main` now; kept so PR #4 keeps pointing at it. |
 | `evidence-host/pr-4` | Throwaway Worker that hosts the PR screenshot. Branched before the fix, so it lacks it. |
 
