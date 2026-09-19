@@ -22,6 +22,17 @@ This is the **only** package under `packages/core/` with a `check` script; sibli
 `scripts` at all, use `bun test`, or use `node --experimental-strip-types`. Do not assume a shared
 command across the monorepo.
 
+## Lint config
+
+`biome.jsonc` extends `ultracite/biome/core`. Three formatter settings are pinned to the repo's own
+style (tabs, 120 cols, `trailingCommas: "all"` in call arguments) so adopting the preset does not
+reformat existing source — without them `biome check --write` rewrites every file.
+
+Thirty rules carry an `"off"` with its reason inline. Before adding another, check it is not a false
+positive against this code: tool `execute` handlers must be `async` by the SDK, and flow analysis
+cannot see across async or timer boundaries. If the rule fights deliberate style rather than
+correctness, disable it here and say why. Keep the file `.jsonc` — the comments are the record.
+
 ## Where truth lives
 
 - `README.md` — tool contract, model-resolution order, the tool table, examples.
