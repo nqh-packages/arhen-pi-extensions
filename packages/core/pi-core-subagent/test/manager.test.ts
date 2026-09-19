@@ -67,6 +67,26 @@ describe("createRun", () => {
 		);
 		expect(m.listRuns()).toHaveLength(0);
 	});
+	test("a model-resolution failure keeps the original error as its cause", () => {
+		// The re-throw adds task context; without `cause` the original stack is discarded, which
+		// makes a real provider or registry failure much harder to diagnose.
+		const m = makeManager();
+		const ctx = {
+			cwd: "/tmp",
+			hasUI: false,
+			modelRegistry: { getAvailable: () => [], find: () => undefined },
+		} as unknown as ExtensionContext;
+		let caught: Error | undefined;
+		try {
+			m.createRun({ tasks: [{ agent: "a", task: "t", model: "nope/missing" }] }, ctx);
+		} catch (err) {
+			caught = err as Error;
+		}
+		expect(caught).toBeInstanceOf(Error);
+		const cause = caught?.cause;
+		expect(cause).toBeInstanceOf(Error);
+		expect((cause as Error).message).toContain("Model not found");
+	});
 	test("a bad model in ONE task refuses the whole spawn, naming that task", () => {
 		const m = makeManager();
 		const ctx = {
@@ -133,7 +153,7 @@ describe("createRun", () => {
 			...stubCtx,
 			modelRegistry: {
 				getAvailable: () => MODELS,
-				find: (p: string, id: string) => MODELS.find((m) => m.provider === p && m.id === id),
+				find: (p: string, id: string) => MODELS.find((candidate) => candidate.provider === p && candidate.id === id),
 			},
 		} as unknown as ExtensionContext;
 		let message = "";

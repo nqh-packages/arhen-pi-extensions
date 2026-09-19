@@ -62,7 +62,11 @@ function callSummary(args: Record<string, unknown> | undefined): string {
 	return typeof first === "string" ? first : "";
 }
 
-export type PeekLine = { gutter: string; text: string; kind: "call" | "result" | "error" | "say" };
+export interface PeekLine {
+	gutter: string;
+	text: string;
+	kind: "call" | "result" | "error" | "say";
+}
 
 function eventLines(raw: string): PeekLine[] {
 	let entry: any;

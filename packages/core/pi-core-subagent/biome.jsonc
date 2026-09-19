@@ -1,0 +1,95 @@
+{
+	// Ultracite's Biome preset, minus the rules that fight this codebase's deliberate style.
+	// Every "off" below is a judgment, not a bypass: see the note on each group.
+	// The repository's own formatter settings are pinned so adopting the preset does not
+	// reformat existing source (tabs, 120 cols, trailing commas everywhere).
+	"$schema": "https://biomejs.dev/schemas/2.5.8/schema.json",
+	"extends": ["ultracite/biome/core"],
+	"formatter": {
+		"enabled": true,
+		"indentStyle": "tab",
+		"lineWidth": 120
+	},
+	"javascript": {
+		"formatter": {
+			// "es5" (the preset's value) omits call-argument trailing commas; this repo writes them.
+			"trailingCommas": "all"
+		}
+	},
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"suspicious": {
+				// Pre-existing project decisions, carried over from the config this replaces.
+				"noExplicitAny": "off",
+				"noControlCharactersInRegex": "off",
+				// Tool `execute` handlers must return a Promise (SDK ExtensionAPI), so `async`
+				// without `await` is required, not a mistake.
+				"useAwait": "off",
+				// Flow analysis cannot see across an async boundary or a timer callback, so it
+				// flags guards that are load-bearing (e.g. `this.cleared`, `ctx`).
+				"noUnnecessaryConditions": "off",
+				"noNestedPromises": "off",
+				"noParametersOnlyUsedInRecursion": "off",
+				// `() => {}` and `() => (closed = true)` are deliberate test callbacks.
+				"noEmptyBlockStatements": "off",
+				"noReturnAssign": "off",
+				// Kept visible as advice: shadowing is a real readability hazard.
+				"noShadow": "warn"
+			},
+			"style": {
+				"noNonNullAssertion": "off",
+				// 207 single-line early-return guards are the house style; braces would triple
+				// their length and make the control flow harder to scan.
+				"useBlockStatements": "off",
+				// Cosmetic preferences with no correctness content.
+				"useReadonlyClassProperties": "off",
+				"noIncrementDecrement": "off",
+				"noNestedTernary": "off",
+				"useNumericSeparators": "off",
+				"useConsistentMethodSignatures": "off",
+				"noParameterProperties": "off",
+				"useDestructuring": "off",
+				"noUnusedTemplateLiteral": "off",
+				"useAtIndex": "off",
+				// `.map()` over a mutable local (the stemmer in agentfile.ts) reads clearly.
+				"noParameterAssign": "off",
+				// Inverting a condition to avoid `else` makes the negated case the primary path.
+				"noNegationElse": "off"
+			},
+			"complexity": {
+				// Rewrites `!a || !b` into `!(a && b)`, which is harder to read, not safer.
+				"useSimplifiedLogicExpression": "off",
+				"noExcessiveCognitiveComplexity": "off",
+				"noVoid": "off",
+				"noForEach": "off"
+			},
+			"performance": {
+				// The flagged regexes are one-shot calls on cold paths, not loops.
+				"useTopLevelRegex": "off",
+				// Ordered awaits in the scheduler are intentional: concurrency is bounded explicitly.
+				"noAwaitInLoops": "off"
+			}
+		}
+	},
+	"assist": {
+		"actions": {
+			"source": {
+				"organizeImports": "on",
+				// Key/interface ordering is semantic in places (spreads, config literals) and
+				// produces a large cosmetic diff across files this change does not otherwise touch.
+				"useSortedKeys": "off",
+				"useSortedInterfaceMembers": "off",
+				"useSortedPackageJson": "off"
+			}
+		}
+	},
+	"json": {
+		"formatter": {
+			"enabled": true,
+			"indentStyle": "tab",
+			"lineWidth": 120,
+			"trailingCommas": "none"
+		}
+	}
+}

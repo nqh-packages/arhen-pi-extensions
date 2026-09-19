@@ -290,7 +290,7 @@ export async function ensureUsableModel(
 
 async function createChildModelRuntime(ctx: ExtensionContext) {
 	const ids = ctx.modelRegistry.getRegisteredProviderIds?.() ?? [];
-	if (ids.length === 0) return undefined;
+	if (ids.length === 0) return;
 	const agentDir = getAgentDir();
 	const runtime = await ModelRuntime.create({
 		authPath: join(agentDir, "auth.json"),
@@ -1246,6 +1246,7 @@ export class SubagentManager {
 					: "";
 				throw new Error(
 					`Task ${input.id ?? `task_${i + 1}`} (${input.agent}): ${err instanceof Error ? err.message : String(err)}${where}`,
+					{ cause: err },
 				);
 			}
 		}

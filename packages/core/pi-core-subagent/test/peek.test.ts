@@ -93,10 +93,10 @@ test("describeCall renders human activity lines", () => {
 });
 
 test("colorNums never colors inside ANSI escapes", () => {
-	const theme = {
-		fg: (c: string, s: string) => `\x1b[${c === "syntaxNumber" ? "38;2;1;2;3" : "38;2;9;9;9"}m${s}\x1b[0m`,
+	const ansiTheme = {
+		fg: (c: string, text: string) => `\x1b[${c === "syntaxNumber" ? "38;2;1;2;3" : "38;2;9;9;9"}m${text}\x1b[0m`,
 	} as any;
-	const out = colorNums("16 tools · ↑ 460.6k · running 2m30s", theme);
+	const out = colorNums("16 tools · ↑ 460.6k · running 2m30s", ansiTheme);
 
 	expect(out).toContain("38;2;1;2;3m460.6k\x1b[0m");
 	expect(out).toContain("38;2;1;2;3m2m30s\x1b[0m");
