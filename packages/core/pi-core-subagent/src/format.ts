@@ -4,6 +4,7 @@ import { type Component, truncateToWidth } from "@earendil-works/pi-tui";
 import {
 	MAX_TASKS,
 	type ModelCatalog,
+	type ModelPricing,
 	type RunSnapshot,
 	type RunStatus,
 	type TaskSnapshot,
@@ -28,6 +29,17 @@ export function getFirstText(message: AssistantMessage): string {
 }
 function fmtTokens(n: number): string {
 	return n >= 1000 ? `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k` : String(n);
+}
+function contextTag(contextWindow: number): string {
+	if (contextWindow <= 0) return "ctx ?";
+	if (contextWindow >= 1_000_000) return `${contextWindow / 1_000_000}M ctx`;
+	if (contextWindow >= 1_000) return `${Math.round(contextWindow / 1_000)}k ctx`;
+	return `${contextWindow} ctx`;
+}
+function priceTag(cost: ModelPricing): string {
+	const price = (value: number) => (value === 0 ? "free" : `$${value.toFixed(value < 0.01 ? 4 : 2)}`);
+	const cacheRead = cost.cacheRead > 0 ? ` / ${price(cost.cacheRead)} cache read` : "";
+	return `${price(cost.input)} in / ${price(cost.output)} out${cacheRead} per MTok`;
 }
 export function formatUsage(usage: UsageStats): string {
 	const parts: string[] = [];
@@ -270,24 +282,22 @@ export function renderModelCatalog(catalog: ModelCatalog): {
 	}
 	const lines = catalog.models.map((m) =>
 		[
-			`- model: "${m.reference}"`,
-			`    ${m.name}; ${m.contextWindow > 0 ? `${m.contextWindow.toLocaleString("en-US")} context` : "context window unreported"}`,
-			m.reasoning
-				? `    thinking levels: ${m.thinkingLevels.join(" | ") || "none"}`
-				: `    thinking: not supported — omit it or pass "off"`,
-		].join("\n"),
+			`- \`${m.reference}\``,
+			contextTag(m.contextWindow),
+			`thinking: ${m.reasoning ? m.thinkingLevels.join(" | ") || "off" : "off"}`,
+			`price: ${priceTag(m.cost)}`,
+		].join(" · "),
 	);
 	const caution = catalog.ambiguous?.length
 		? `\n\nDo not pass these references: ${catalog.ambiguous.join(", ")}. ${catalog.reason}`
 		: "";
 	const faults = catalog.unresolved?.length ? `\n\n${catalog.unresolvedReason}` : "";
+	const heading =
+		catalog.scope === "session"
+			? `Enabled subagent models (${catalog.models.length}):`
+			: `Available subagent models (${catalog.models.length}):`;
 	return {
-		content: [
-			{
-				type: "text",
-				text: `${catalog.models.length} model(s) usable for subagents. Pass the \`model\` value verbatim in each subagent task:\n${lines.join("\n")}${caution}${faults}`,
-			},
-		],
+		content: [{ type: "text", text: `${heading}\n${lines.join("\n")}${caution}${faults}` }],
 		details: catalog,
 	};
 }

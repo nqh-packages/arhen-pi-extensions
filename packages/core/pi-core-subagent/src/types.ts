@@ -74,6 +74,14 @@ export interface PendingReply {
 	resolve: (message: string) => void;
 }
 
+/** Per-million-token USD rates reported by Pi's model catalogue. */
+export interface ModelPricing {
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+}
+
 /** One selectable model, as the agent needs it to choose: what to pass, and what it supports. */
 export interface SelectableModel {
 	/** The value to pass as `model` ("provider/id"). */
@@ -86,10 +94,14 @@ export interface SelectableModel {
 	thinkingLevels: string[];
 	/** 0 when the provider did not report one. */
 	contextWindow: number;
+	/** Per-million-token USD rates from Pi's model catalogue. */
+	cost: ModelPricing;
 }
 
 export interface ModelCatalog {
 	models: SelectableModel[];
+	/** Pi resolves `enabledModels` and `--models` into the session scope. */
+	scope: "session" | "all";
 	/** References that are NOT safe to pass because another model's bare id would win resolution. */
 	ambiguous?: string[];
 	/** Why the ambiguous references are unsafe, in full, so the agent can act instead of retrying blindly. */

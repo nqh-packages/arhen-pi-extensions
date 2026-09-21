@@ -57,10 +57,6 @@ correctness, disable it here and say why. Keep the file `.jsonc` — the comment
   `{ isError: false }` for any `execute` that does not throw, discarding a returned `isError: true`.
 - Every subagent task must name a `model`; there is no default. The error names passable
   references. Keep it that way — an inherited session model makes "which model ran" unknowable.
-- Model preferences live in `~/.pi/agent/subagent-models.json` (`src/modelconfig.ts`), read from
-  `getAgentDir()`. They only filter and order the catalog — never grant or block a model. Keep that
-  boundary: pi owns what may run, and a second authority would contradict it. `listSelectableModels`
-  takes an injectable `preferences` argument so the file-to-catalog path stays testable.
 - `subagent_models` is scoped to `ctx.scopedModels` (pi's resolution of `enabledModels` and
   `--models`), falling back to all available only when nothing is scoped; each entry carries pi's
   own per-Mtok cost. Do not widen it to `getAvailable()` — that offers models the session cannot use.

@@ -450,6 +450,50 @@ describe("listSelectableModels", () => {
 		// The catalog's promise is that a listed reference resolves — prove it for real, not by shape.
 		expect(resolveChildModel(withRegistry(models), catalog.models[0]!.reference)).toBe(models[0] as never);
 	});
+	test("lists only enabled models in one concise line each", () => {
+		const enabled = {
+			provider: "enabled",
+			id: "allowed",
+			name: "Allowed",
+			reasoning: true,
+			contextWindow: 100,
+			thinkingLevelMap: { off: null, minimal: null, low: null, medium: "medium", high: null, xhigh: null, max: null },
+			cost: { input: 0.14, output: 0.28, cacheRead: 0, cacheWrite: 0 },
+		};
+		const excluded = {
+			provider: "available",
+			id: "but-not-enabled",
+			name: "Excluded",
+			reasoning: false,
+			contextWindow: 200,
+		};
+		const ctx = {
+			...withRegistry([enabled, excluded]),
+			scopedModels: [{ model: enabled }],
+		} as unknown as ExtensionContext;
+
+		const catalog = listSelectableModels(ctx);
+		expect(catalog.scope).toBe("session");
+		expect(catalog.models.map((model) => model.reference)).toEqual(["enabled/allowed"]);
+		expect(renderModelCatalog(catalog).content[0]!.text).toBe(
+			"Enabled subagent models (1):\n- `enabled/allowed` · 100 ctx · thinking: off | medium · price: $0.14 in / $0.28 out per MTok",
+		);
+	});
+
+	test("names a collision when every enabled reference is withheld", () => {
+		const shadowed = { provider: "a", id: "m", name: "A/M", reasoning: true, contextWindow: 100 };
+		const shadow = { provider: "b", id: "a/m", name: "B/AM", reasoning: false, contextWindow: 100 };
+		const ctx = {
+			...withRegistry([shadowed, shadow]),
+			scopedModels: [{ model: shadowed }],
+		} as unknown as ExtensionContext;
+
+		const catalog = listSelectableModels(ctx);
+		expect(catalog.models).toEqual([]);
+		expect(catalog.ambiguous).toEqual(["a/m"]);
+		expect(() => renderModelCatalog(catalog)).toThrow(/all enabled model references are ambiguous: a\/m/);
+	});
+
 	test("thinking levels are the model's real ones, not the full enum", () => {
 		// `null` marks a level unsupported; an absent key keeps the provider default (supported).
 		const thinkingLevelMap: Record<string, string | null> = {
@@ -547,7 +591,7 @@ describe("catalog truthfulness (regressions)", () => {
 		expect(catalog.models[0]!.contextWindow).toBe(0);
 		// Invoke the actual renderer the tool returns, not a copy of its interpolation.
 		const out = renderModelCatalog(catalog);
-		expect(out.content[0]!.text).toContain("context window unreported");
+		expect(out.content[0]!.text).toContain("ctx ?");
 	});
 
 	test("the catalog never advertises a thinking level the runtime would silently clamp", () => {
@@ -595,10 +639,10 @@ describe("registry faults are not misreported as collisions", () => {
 	test("an empty catalog throws, because the SDK drops a returned isError", () => {
 		// pi-agent-core returns {isError:false} for any execute that does not throw, so a returned
 		// flag would present an unusable catalog as success. The renderer must throw instead.
-		expect(() => renderModelCatalog({ models: [], unavailable: "no model has usable credentials" })).toThrow(
-			/no model has usable credentials/,
-		);
-		expect(() => renderModelCatalog({ models: [] })).toThrow(/registry returned no models/);
+		expect(() =>
+			renderModelCatalog({ models: [], scope: "all", unavailable: "no model has usable credentials" }),
+		).toThrow(/no model has usable credentials/);
+		expect(() => renderModelCatalog({ models: [], scope: "all" })).toThrow(/registry returned no models/);
 	});
 
 	test("a registry fault is reported as unavailable, not as a name collision", () => {

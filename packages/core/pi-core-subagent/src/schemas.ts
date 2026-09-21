@@ -29,7 +29,7 @@ const TaskItem = Type.Object({
 	model: Type.Optional(
 		Type.String({
 			description:
-				"Model override (provider/model-id). Required: a task with neither this nor an agent-file `model` is rejected — there is no default model. Call subagent_models for the references this machine accepts.",
+				"Model override (provider/model-id). Required: a task with neither this nor an agent-file `model` is rejected — there is no default model. Call subagent_models for the enabled references.",
 		}),
 	),
 	thinking: Type.Optional(StringEnum(THINKING_LEVELS, { description: "Thinking level override" })),

@@ -195,28 +195,32 @@ async function probeModel(
 }
 
 /**
- * Every model a task may name, read from the same registry the spawn resolves against.
+ * Models the catalog advertises, scoped the same way Pi scopes the session.
  *
- * A reference is emitted only when it resolves back to the model it describes. Resolution is not a
- * pure `provider/id` split: a model whose bare id contains a slash can shadow another provider's
- * `provider/id` (see `resolveChildModel`), so building the string naively would advertise a
- * reference that silently selects a different model. Anything ambiguous is reported as such.
+ * `ctx.scopedModels` is Pi's resolution of `enabledModels` and `--models`. When it is empty, Pi
+ * treats every available model as enabled. A reference is emitted only when it resolves back to the
+ * model it describes. Resolution is not a pure `provider/id` split: a model whose bare id contains
+ * a slash can shadow another provider's `provider/id` (see `resolveChildModel`), so building the
+ * string naively would advertise a reference that silently selects a different model. Anything
+ * ambiguous is reported as such.
  */
 export function listSelectableModels(ctx: ExtensionContext): ModelCatalog {
+	const scoped = ctx.scopedModels ?? [];
+	const scope: ModelCatalog["scope"] = scoped.length > 0 ? "session" : "all";
 	if (!ctx.modelRegistry) {
-		return { models: [], unavailable: "this context exposes no model registry" };
+		return { models: [], scope, unavailable: "this context exposes no model registry" };
 	}
-	let available: Model<Api>[];
+	let candidates: Model<Api>[];
 	try {
-		available = ctx.modelRegistry.getAvailable() ?? [];
+		candidates = scoped.length > 0 ? scoped.map((entry) => entry.model) : (ctx.modelRegistry.getAvailable() ?? []);
 	} catch (err) {
-		return { models: [], unavailable: err instanceof Error ? err.message : String(err) };
+		return { models: [], scope, unavailable: err instanceof Error ? err.message : String(err) };
 	}
 
 	const models: SelectableModel[] = [];
 	const ambiguous: string[] = [];
 	const unresolved: string[] = [];
-	for (const m of available) {
+	for (const m of candidates) {
 		const reference = `${m.provider}/${m.id}`;
 		let resolved: Model<Api> | undefined;
 		let lookupError: string | undefined;
@@ -244,10 +248,17 @@ export function listSelectableModels(ctx: ExtensionContext): ModelCatalog {
 			reasoning: Boolean(m.reasoning),
 			thinkingLevels: supportedThinkingLevels(m),
 			contextWindow: typeof m.contextWindow === "number" ? m.contextWindow : 0,
+			cost: {
+				input: m.cost?.input ?? 0,
+				output: m.cost?.output ?? 0,
+				cacheRead: m.cost?.cacheRead ?? 0,
+				cacheWrite: m.cost?.cacheWrite ?? 0,
+			},
 		});
 	}
 	return {
 		models,
+		scope,
 		...(ambiguous.length > 0
 			? {
 					ambiguous,
@@ -257,18 +268,28 @@ export function listSelectableModels(ctx: ExtensionContext): ModelCatalog {
 		...(unresolved.length > 0
 			? { unresolved, unresolvedReason: `the registry could not resolve these entries: ${unresolved.join(", ")}` }
 			: {}),
-		...(models.length === 0 ? { unavailable: "no model has usable credentials" } : {}),
+		...(models.length === 0
+			? {
+					unavailable:
+						ambiguous.length > 0
+							? `all ${scope === "session" ? "enabled" : "available"} model references are ambiguous: ${ambiguous.join(", ")}`
+							: scope === "session"
+								? "the session's enabled models could not be resolved"
+								: "no model has usable credentials",
+				}
+			: {}),
 	};
 }
 
 /** Names what the caller can pass, and the one call that lists them. Never hides the failure. */
 function modelHint(ctx: ExtensionContext): string {
-	const { models, unavailable } = listSelectableModels(ctx);
+	const { models, scope, unavailable } = listSelectableModels(ctx);
 	if (models.length === 0)
 		return ` Call subagent_models for the list${unavailable ? ` (currently unavailable: ${unavailable})` : ""}.`;
 	const shown = models.slice(0, 8).map((m) => m.reference);
 	const more = models.length > shown.length ? `, +${models.length - shown.length} more` : "";
-	return ` Call subagent_models for the full list. Available now: ${shown.join(", ")}${more}.`;
+	const availability = scope === "session" ? "Enabled now" : "Available now";
+	return ` Call subagent_models for the full list. ${availability}: ${shown.join(", ")}${more}.`;
 }
 
 export async function ensureUsableModel(

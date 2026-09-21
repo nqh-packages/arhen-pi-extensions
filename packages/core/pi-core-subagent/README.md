@@ -82,7 +82,7 @@ The dotted arrows are the whole point: a child may burn 200k tokens reading file
 
 ## Usage — the leader invents the agents
 
-Define agents inline per call, or reference a named agent file (see [Agent files](#agent-files)). Model resolution: agent-file `model` → explicit `model` → **rejected** (a matched agent file wins, so its frontmatter overrides the inline value). There is no default model: a task that names neither is a hard error, so every task states its model choice rather than silently inheriting the leader's. Call `subagent_models` for the list of references this machine accepts.
+Define agents inline per call, or reference a named agent file (see [Agent files](#agent-files)). Model resolution: agent-file `model` → explicit `model` → **rejected** (a matched agent file wins, so its frontmatter overrides the inline value). There is no default model: a task that names neither is a hard error, so every task states its model choice rather than silently inheriting the leader's. Call `subagent_models` for the models enabled in this session (or every available model when Pi has no scope).
 
 ```json
 {
@@ -134,7 +134,7 @@ You are a strict API reviewer. Check auth, rate limiting, and error handling. Ci
 1. `.agents/agents/` then `.claude/agents/` then `.pi/agents/` in each directory from the task `cwd` up to the filesystem root (nearest ancestor wins).
 2. Home: `~/.agents/agents/` (single source) → `~/.claude/agents/` → `~/.pi/agents/`.
 
-Within a directory the file with the highest description-overlap score wins (≥2 shared meaningful tokens). A file `model` is validated against the pi model registry; an unknown one fails the task with the registry's message (call `subagent_models` for the accepted references). Files without a `description` frontmatter never match.
+Within a directory the file with the highest description-overlap score wins (≥2 shared meaningful tokens). A file `model` is validated against the pi model registry; an unknown one fails the task with the registry's message (call `subagent_models` for the enabled references (or every available reference when Pi has no scope)). Files without a `description` frontmatter never match.
 
 ## Worktree isolation (write agents)
 
@@ -290,7 +290,7 @@ Background (default) + intercom — the run returns a runId immediately; you sta
 
 | Tool | Purpose |
 |---|---|
-| `subagent_models` | list the models this machine accepts, each with the exact `model` value to pass, its thinking levels, and context window; call it before the first spawn and after a rejection |
+| `subagent_models` | list models enabled for the session (or every available model when Pi has no scope), each with the exact `model` value, thinking levels, context window, and Pi catalog pricing; call it before the first spawn and after a rejection |
 | `subagent` | single / `tasks` (parallel or graph via `needs`) / `chain` (`{previous}`); every run is background — returns a runId, completion notifies you; `autoAwait:true` parks the call until the run finishes and returns the final result inline; children always carry talk tools (ask/notify/mailbox); `notifyPerTask` (default true) wakes you as each task completes |
 | `subagent_status` | live per-task snapshot (non-blocking), including each child's session file path |
 | `subagent_result` | full output of a run or one task |
