@@ -68,6 +68,17 @@ const WRITE_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write"];
 const WRITE_CAPABLE = ["bash", "edit", "write"];
 
 /**
+ * Render collected per-task problems. One problem keeps the single-task shape callers already expect;
+ * several are numbered so a leader can fix every task in one retry.
+ */
+function describeProblems(kind: string, problems: string[]): string {
+	// Both forms end ready for a caller to concatenate a shared tail directly: one problem is followed
+	// by a space, several are followed by a newline. Neither leaves a trailing gap of its own.
+	if (problems.length === 1) return `${problems[0]} `;
+	return `No ${kind} stated for ${problems.length} tasks:\n${problems.map((p) => `  - ${p}`).join("\n")}\n`;
+}
+
+/**
  * Whether a resolved toolset earns worktree isolation. The child's own tools decide: a child that can
  * only read cannot leave changes to isolate. This is the seam between "what the leader allowed" and
  * "where the child runs", so it is stated once and read by both the spawn path and its test.
@@ -1299,35 +1310,53 @@ export class SubagentManager {
 
 		this.cleared = false;
 
+		// Both checks collect every offender before throwing, so one call reports all of them instead of
+		// the leader fixing one task, retrying, and discovering the next. Model is reported ahead of
+		// toolset because that ordering is the pre-existing contract: a spawn wrong about both is told
+		// about its model first, then its toolset on the retry.
+		const modelProblems: string[] = [];
+		const allowanceProblems: string[] = [];
+		// The first resolution failure is kept as the thrown error's `cause`, so a provider or registry
+		// fault is still diagnosable from its original stack rather than only from formatted text.
+		let firstModelCause: unknown;
+
 		for (let i = 0; i < inputs.length; i++) {
 			const input = inputs[i] as TaskInput;
 			const cwd = input.cwd ?? ctx.cwd;
 			const file = resolveAgentFile(input.agent, input.task, cwd, getAgentDir());
+			const label = `Task ${input.id ?? `task_${i + 1}`} (${input.agent})`;
 			const choice = chooseModel(file, input.model);
 			if (!choice.requested?.trim()) {
-				throw new Error(
-					`Task ${input.id ?? `task_${i + 1}`} (${input.agent}): no model specified. Every subagent task must name its model explicitly — neither \`model\` nor an agent-file \`model\` was given. Pass \`model: "<provider>/<id>"\` per task.${modelHint(ctx)}`,
+				modelProblems.push(
+					`${label}: no model specified. Pass \`model: "<provider>/<id>"\` — neither \`model\` nor an agent-file \`model\` was given, and there is no default.`,
 				);
+			} else {
+				try {
+					validateThinking(resolveChildModel(ctx, choice.requested), input.thinking);
+				} catch (err) {
+					firstModelCause ??= err;
+					const where = choice.sourceFile
+						? ` (from agent file ${choice.sourceFile}, which overrides the requested model${input.model ? ` "${input.model}"` : ""})`
+						: "";
+					modelProblems.push(`${label}: ${err instanceof Error ? err.message : String(err)}${where}`);
+				}
 			}
-			try {
-				validateThinking(resolveChildModel(ctx, choice.requested), input.thinking);
-			} catch (err) {
-				const where = choice.sourceFile
-					? ` (from agent file ${choice.sourceFile}, which overrides the requested model${input.model ? ` "${input.model}"` : ""})`
-					: "";
-				throw new Error(
-					`Task ${input.id ?? `task_${i + 1}`} (${input.agent}): ${err instanceof Error ? err.message : String(err)}${where}`,
-					{ cause: err },
-				);
-			}
-			// Gated last, so the model contract above reports exactly as it did before: a spawn wrong
-			// about both is told about the model first, then the toolset on the retry.
+
 			const allowance = chooseToolAllowance(file, input);
 			if (allowance.tools === undefined && allowance.write === undefined) {
-				throw new Error(
-					`Task ${input.id ?? `task_${i + 1}`} (${input.agent}): no tool allowance stated. Every subagent task must state what its child may do — neither \`tools\`, \`write\`, nor an agent-file \`tools\` was given. Pass ${TOOL_ALLOWANCE_FORMS}. There is no default.`,
-				);
+				allowanceProblems.push(`${label}: no tool allowance stated. Pass ${TOOL_ALLOWANCE_FORMS}.`);
 			}
+		}
+
+		if (modelProblems.length > 0) {
+			throw new Error(`${describeProblems("model", modelProblems)}${modelHint(ctx).trimStart()}`, {
+				cause: firstModelCause,
+			});
+		}
+		if (allowanceProblems.length > 0) {
+			throw new Error(
+				`${describeProblems("tool allowance", allowanceProblems)}Neither \`tools\`, \`write\`, nor an agent-file \`tools\` was given, and there is no default.`,
+			);
 		}
 
 		const run: RunSnapshot = {

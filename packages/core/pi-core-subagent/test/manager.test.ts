@@ -428,6 +428,110 @@ describe("tool allowance is stated, not defaulted", () => {
 			),
 		).toThrow(/beta/);
 	});
+	test("every allowance-less task is named in one refusal, not just the first", () => {
+		// Otherwise the leader fixes one, retries, and discovers the next — one round trip per task.
+		const m = makeManager();
+		let message = "";
+		try {
+			m.createRun(
+				{
+					tasks: [
+						{ id: "alpha", agent: "a", task: "t1", model: M },
+						{ id: "beta", agent: "b", task: "t2", model: M },
+						{ id: "gamma", agent: "c", task: "t3", model: M, write: false },
+					],
+				},
+				stubCtx,
+			);
+		} catch (err) {
+			message = err instanceof Error ? err.message : String(err);
+		}
+		expect(message).toContain("alpha");
+		expect(message).toContain("beta");
+		expect(message).not.toContain("gamma");
+		expect(message).toMatch(/2 tasks/);
+	});
+	test("the shared tail of a multi-task refusal sits on its own line, not inside the last item", () => {
+		const m = makeManager();
+		let message = "";
+		try {
+			m.createRun(
+				{
+					tasks: [
+						{ id: "alpha", agent: "a", task: "t1", model: M },
+						{ id: "beta", agent: "b", task: "t2", model: M },
+					],
+				},
+				stubCtx,
+			);
+		} catch (err) {
+			message = err instanceof Error ? err.message : String(err);
+		}
+		const lines = message.split("\n");
+		expect(lines.at(-1)).toMatch(/^Neither `tools`/);
+		expect(lines.at(-2)).toContain("beta");
+	});
+	test("a single-task refusal joins its shared tail without a doubled space", () => {
+		const m = makeManager();
+		let message = "";
+		try {
+			m.createRun({ agent: "a", task: "t", model: M }, stubCtx);
+		} catch (err) {
+			message = err instanceof Error ? err.message : String(err);
+		}
+		expect(message).toMatch(/allowlist\. Neither `tools`/);
+	});
+	test("a single modelless refusal joins the model hint without a doubled space", () => {
+		const m = makeManager();
+		let message = "";
+		try {
+			m.createRun({ agent: "a", task: "t" }, stubCtx);
+		} catch (err) {
+			message = err instanceof Error ? err.message : String(err);
+		}
+		expect(message).toMatch(/no default\. Call subagent_models/);
+	});
+	test("a lone offender keeps the single-task message shape", () => {
+		const m = makeManager();
+		let message = "";
+		try {
+			m.createRun({ tasks: [{ id: "solo", agent: "a", task: "t", model: M }] }, stubCtx);
+		} catch (err) {
+			message = err instanceof Error ? err.message : String(err);
+		}
+		expect(message).toMatch(/^Task solo \(a\): no tool allowance stated\./);
+	});
+	test("every modelless task is named in one refusal too", () => {
+		const m = makeManager();
+		let message = "";
+		try {
+			m.createRun(
+				{
+					tasks: [
+						{ id: "alpha", agent: "a", task: "t1" },
+						{ id: "beta", agent: "b", task: "t2" },
+					],
+				},
+				stubCtx,
+			);
+		} catch (err) {
+			message = err instanceof Error ? err.message : String(err);
+		}
+		expect(message).toContain("alpha");
+		expect(message).toContain("beta");
+	});
+	test("model problems still preempt toolset problems", () => {
+		// Existing contract: a spawn wrong about both reports the model first.
+		const m = makeManager();
+		let message = "";
+		try {
+			m.createRun({ tasks: [{ id: "both", agent: "a", task: "t" }] }, stubCtx);
+		} catch (err) {
+			message = err instanceof Error ? err.message : String(err);
+		}
+		expect(message).toMatch(/no model specified/);
+		expect(message).not.toMatch(/tool allowance/i);
+	});
 	test("an unresolvable model is still reported before the allowance", () => {
 		// Both are missing; the model refusal is the existing contract and must keep firing first.
 		const m = makeManager();

@@ -333,11 +333,11 @@ Every task must state what its child may do. There is no default toolset and no 
 | `tools: ["read", "bash"]` | exactly that list |
 | agent file `tools:` frontmatter | that list, when the file is matched |
 
-A task that states none of these is rejected before any child starts, naming the task and the three forms. An empty `tools: []` is refused too — it grants nothing, so it is silence wearing a list.
+A task that states none of these is rejected before any child starts. A single offender is named with the three forms; several are listed together under a `No tool allowance stated for N tasks:` header, so one call reports every task the leader must fix. An empty `tools: []` is refused too — it grants nothing, so it is silence wearing a list.
 
 Two reasons this is a gate rather than a default. A silent read-only child is the expensive case: it cannot run the `Verify:` command every task is asked for, so the failure surfaced only after a full spawn, as a child reporting itself blocked. And the child's toolset decides whether it earns a worktree — an implicit read-only made that a guess rather than a decision.
 
-The refusal for toolset is reported **after** the model refusals, so a spawn wrong about both is told about its model first and its toolset on the retry.
+The refusal for toolset is reported **after** the model refusals, so a spawn wrong about both is told about its model first and its toolset on the retry. Both checks collect every offender in one pass: a run with three modelless tasks names all three rather than making the leader retry per task.
 
 ### Child talk tools (always on)
 

@@ -69,8 +69,13 @@ correctness, disable it here and say why. Keep the file `.jsonc` — the comment
   `tools: [...]` (or a matched agent file's `tools` frontmatter). There is no default toolset. One
   owner: `chooseToolAllowance()` in `manager.ts`, read by the spawn gate and by `resolveToolset()`.
   An empty `tools: []` counts as unstated. The gate runs **after** the model checks so the model
-  contract keeps reporting first. Resume is safe without a gate of its own because it always
-  reconstructs a boolean `write` from the recorded tools.
+  contract keeps reporting first, and both checks **collect every offender** before throwing — one
+  call reports every unfixed task, not just the first. Resume is safe without a gate of its own
+  because it always reconstructs a boolean `write` from the recorded tools.
+- Refusal message shape has one owner: `describeProblems()` in `manager.ts`. One offender renders in
+  the single-task form followed by a space; several render as a numbered block followed by a newline.
+  Both forms end ready for a caller to concatenate a shared tail, which is what keeps the
+  single-task and multi-task messages from producing a doubled space.
 - `subagent_models` is scoped to `ctx.scopedModels` (pi's resolution of `enabledModels` and
   `--models`), falling back to all available only when nothing is scoped; each entry carries pi's
   own per-Mtok cost. Apply user catalog advice only after this list is resolved. Do not widen it to
