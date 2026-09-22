@@ -51,7 +51,7 @@ flowchart LR
 - **Proof is an exit code, never a self-report.** Tasks are asked for a runnable `Verify:` command; the leader checks `git diff --stat`. Agents auditing their own work score ~0. ([why](#why-9-is-a-verification-command-not-a-self-report))
 - **No ceremony without edges.** Six independent reviewers stay six independent reviewers — no waves, no gates, no graph vocabulary imposed on flat work.
 - **Agent files respected.** A spawn goal (name + task) that matches a user agent file's `description` (`.agents/agents`, `.claude/agents`, `.pi/agents` — project then home) loads that file — body = system prompt, frontmatter `model`/`tools` apply, file `model` validated against the pi model registry. File wins over inline; no match → on-demand definition.
-- **Two toolsets, plus explicit override.** Read-only (`read, grep, find, ls` — default) or write (`read, grep, find, ls, bash, edit, write` — `write: true`); `tools:` sets an explicit per-task allowlist.
+- **Two toolsets, plus explicit override — stated, never defaulted.** Read-only (`read, grep, find, ls` — `write: false`) or write (`read, grep, find, ls, bash, edit, write` — `write: true`); `tools:` sets an explicit per-task allowlist. A task that states none of the three is **refused at call time**; there is no default toolset.
 - **In-process** — children are `AgentSession`s in the same runtime. No process spawn, no context bleed.
 - **Zero parent-context injection.** No catalog, no context hook. 10 slim tools total.
 - **Throttled updates** — widget/stream updates coalesce to ~6/s; no per-event deep clones.
@@ -89,6 +89,7 @@ Define agents inline per call, or reference a named agent file (see [Agent files
   "agent": "api-reviewer",
   "prompt": "You are a strict API reviewer. Check auth, rate limiting, and error handling. Cite file:line.",
   "model": "anthropic/claude-sonnet-4-6",
+  "write": false,
   "task": "Review src/api/upload.ts"
 }
 ```
@@ -115,9 +116,25 @@ Chain — `{previous}` is replaced with the prior agent's output:
 }
 ```
 
+## Model catalog advice (optional)
+
+`~/.pi/agent/subagent-models.json` may add user-owned guidance to `subagent_models`:
+
+```json
+{
+  "default": "provider/model-id",
+  "note": "Choose a lower-cost model for routine work. Use a higher-cost model only when explicitly requested."
+}
+```
+
+- `default` appears only when that exact reference is enabled in the current Pi session.
+- `note` appears verbatim beside the model list.
+
+Both fields are advisory. They never change Pi's enabled set and never supply a task's required `model`.
+
 ## Agent files
 
-A user agent file in an agents directory is matched by its `description` frontmatter against the spawn goal (`agent` name + `task`) — not by name. When matched, the file is **authoritative**: body = system prompt, frontmatter `model`/`tools` apply, inline `prompt`/`model` are ignored — with one exception: explicit per-call `tools`/`write` override the file's tools (the file narrows defaults, it never displaces explicit intent, and it can never widen past the leader's read/write choice). An override is surfaced on the task's notice and summary. No match → the inline on-demand definition stands. The model stays in control: it names the agent and states the goal; user files that describe that goal take over.
+A user agent file in an agents directory is matched by its `description` frontmatter against the spawn goal (`agent` name + `task`) — not by name. When matched, the file is **authoritative**: body = system prompt, frontmatter `model`/`tools` apply, inline `prompt`/`model` are ignored — with one exception: explicit per-call `tools`/`write` override the file's tools (the file supplies the default for that task, it never displaces explicit intent, and it can never widen past the leader's read/write choice). A file's `tools` frontmatter **satisfies the tool-allowance gate**, so a task that matches such a file need not repeat the allowance inline. An override is surfaced on the task's notice and summary. No match → the inline on-demand definition stands, and the inline task must then state its own allowance. The model stays in control: it names the agent and states the goal; user files that describe that goal take over.
 
 ```md
 ---
@@ -154,7 +171,7 @@ Same-wave write tasks are **siblings**: both branch from the same base, so they 
 
 **Dependencies are shared, not isolated.** `node_modules` is symlinked to the main checkout, so dependency writes escape the worktree: children are instructed never to install, upgrade, or delete deps. A task that genuinely needs a dependency change should edit the manifest and say so.
 
-Isolation follows the toolset the child actually receives: explicit `tools: ["bash", "edit", "write"]` earns a worktree even without `write: true`, and an agent file that narrows the child to read-only gets no branch at all.
+Isolation follows the toolset the child actually receives: explicit `tools: ["bash", "edit", "write"]` earns a worktree even without `write: true`, and an agent file that narrows the child to read-only gets no branch at all. Because the toolset is now always stated, whether a task gets a worktree is a decision the leader made rather than one inferred from silence.
 
 Cleanup, in order of trust:
 
@@ -173,8 +190,8 @@ Non-git repos fall back to in-place edits.
 ```json
 {
   "tasks": [
-    { "id": "api", "agent": "api-mapper", "task": "Map every route in src/api/", "model": "anthropic/claude-sonnet-4-6" },
-    { "id": "db",  "agent": "db-mapper",  "task": "Map the schema in src/db/", "model": "anthropic/claude-sonnet-4-6" },
+    { "id": "api", "agent": "api-mapper", "task": "Map every route in src/api/", "write": false, "model": "anthropic/claude-sonnet-4-6" },
+    { "id": "db",  "agent": "db-mapper",  "task": "Map the schema in src/db/", "write": false, "model": "anthropic/claude-sonnet-4-6" },
     { "id": "doc", "agent": "writer", "needs": ["api", "db"], "write": true, "model": "anthropic/claude-sonnet-4-6",
       "task": "Write ARCHITECTURE.md from the maps above. Verify: test -s ARCHITECTURE.md" }
   ]
@@ -278,6 +295,7 @@ Background (default) + intercom — the run returns a runId immediately; you sta
   "agent": "auditor",
   "prompt": "You audit dependencies.",
   "model": "anthropic/claude-sonnet-4-6",
+  "write": false,
   "task": "Audit package.json for outdated deps"
 }
 ```
@@ -290,7 +308,7 @@ Background (default) + intercom — the run returns a runId immediately; you sta
 
 | Tool | Purpose |
 |---|---|
-| `subagent_models` | list models enabled for the session (or every available model when Pi has no scope), each with the exact `model` value, thinking levels, context window, and Pi catalog pricing; call it before the first spawn and after a rejection |
+| `subagent_models` | list models enabled for the session (or every available model when Pi has no scope), each with the exact `model` value, thinking levels, context window, Pi catalog pricing, and optional user-owned catalog advice; call it before the first spawn and after a rejection |
 | `subagent` | single / `tasks` (parallel or graph via `needs`) / `chain` (`{previous}`); every run is background — returns a runId, completion notifies you; `autoAwait:true` parks the call until the run finishes and returns the final result inline; children always carry talk tools (ask/notify/mailbox); `notifyPerTask` (default true) wakes you as each task completes |
 | `subagent_status` | live per-task snapshot (non-blocking), including each child's session file path |
 | `subagent_result` | full output of a run or one task |
@@ -302,7 +320,24 @@ Background (default) + intercom — the run returns a runId immediately; you sta
 
 ### Per-task fields
 
-`agent` (name you invent — required), `task` (required), `model` (required unless an agent file declares one — see below), `prompt` (system prompt, optional — minimal default used), `write` (toolset, default read-only), plus optional `thinking` (validated enum: `off|minimal|low|medium|high|xhigh|max`), `tools` (explicit allowlist), `cwd`, `maxRuntimeMs`, `id`, `needs` (dependency edges — see [Graph mode](#graph-mode--needs)). Top-level only: `autoAwait`, `notifyPerTask`, `concurrency`.
+`agent` (name you invent — required), `task` (required), `model` (required unless an agent file declares one — see below), `prompt` (system prompt, optional — minimal default used), an explicit **tool allowance** (`write: true`, `write: false`, or `tools: [...]` — required unless an agent file supplies `tools`; see below), plus optional `thinking` (validated enum: `off|minimal|low|medium|high|xhigh|max`), `cwd`, `maxRuntimeMs`, `id`, `needs` (dependency edges — see [Graph mode](#graph-mode--needs)). Top-level only: `autoAwait`, `notifyPerTask`, `concurrency`.
+
+### Tool allowance is required
+
+Every task must state what its child may do. There is no default toolset and no fallback:
+
+| Form | Toolset |
+|---|---|
+| `write: false` | read-only — `read, grep, find, ls` |
+| `write: true` | write — `read, grep, find, ls, bash, edit, write` |
+| `tools: ["read", "bash"]` | exactly that list |
+| agent file `tools:` frontmatter | that list, when the file is matched |
+
+A task that states none of these is rejected before any child starts, naming the task and the three forms. An empty `tools: []` is refused too — it grants nothing, so it is silence wearing a list.
+
+Two reasons this is a gate rather than a default. A silent read-only child is the expensive case: it cannot run the `Verify:` command every task is asked for, so the failure surfaced only after a full spawn, as a child reporting itself blocked. And the child's toolset decides whether it earns a worktree — an implicit read-only made that a guess rather than a decision.
+
+The refusal for toolset is reported **after** the model refusals, so a spawn wrong about both is told about its model first and its toolset on the retry.
 
 ### Child talk tools (always on)
 

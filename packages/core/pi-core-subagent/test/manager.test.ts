@@ -7,11 +7,13 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { renderModelCatalog } from "../src/format.ts";
 import {
 	chooseModel,
+	earnsIsolation,
 	listSelectableModels,
 	resolveChildModel,
 	SubagentManager,
 	validateThinking,
 } from "../src/manager.ts";
+import { applyCatalogAdvice } from "../src/modelconfig.ts";
 
 const stubPi = { events: { emit() {} }, sendUserMessage() {} } as unknown as ExtensionAPI;
 /** One fixture model, so every spawn in these scheduler tests can name a model it resolves against. */
@@ -26,6 +28,11 @@ const stubCtx = {
 	},
 } as unknown as ExtensionContext;
 const M = "fixture/fixture-model";
+/**
+ * A stated tool allowance for tests that exercise something other than the allowance gate. The gate
+ * is opt-out-free by design, so a fixture that omits it never reaches its own assertion.
+ */
+const RO = { write: false } as const;
 
 function makeManager(): SubagentManager {
 	return new SubagentManager(stubPi);
@@ -39,7 +46,7 @@ describe("createRun", () => {
 	test("tasks[] wins over leftover top-level agent/task (models forget to drop them)", () => {
 		const m = makeManager();
 		const { run, inputs } = m.createRun(
-			{ agent: "a", task: "t", tasks: [{ agent: "b", task: "t2", model: M }] },
+			{ agent: "a", task: "t", tasks: [{ agent: "b", task: "t2", model: M, ...RO }] },
 			stubCtx,
 		);
 		expect(run.mode).toBe("parallel");
@@ -101,8 +108,8 @@ describe("createRun", () => {
 			m.createRun(
 				{
 					tasks: [
-						{ id: "ok", agent: "a", task: "t1", model: "good" },
-						{ id: "bad", agent: "b", task: "t2", model: "missing" },
+						{ id: "ok", agent: "a", task: "t1", model: "good", ...RO },
+						{ id: "bad", agent: "b", task: "t2", model: "missing", ...RO },
 					],
 				},
 				ctx,
@@ -133,7 +140,7 @@ describe("createRun", () => {
 			m.createRun(
 				{
 					tasks: [
-						{ id: "ok", agent: "a", task: "t1", model: M },
+						{ id: "ok", agent: "a", task: "t1", model: M, ...RO },
 						{ id: "bare", agent: "b", task: "t2" },
 					],
 				},
@@ -184,8 +191,8 @@ describe("createRun", () => {
 				cwd: "/run/wide",
 				maxRuntimeMs: 1234,
 				tasks: [
-					{ agent: "a", task: "t1", model: M },
-					{ agent: "b", task: "t2", cwd: "/per/task", maxRuntimeMs: 99, model: M },
+					{ agent: "a", task: "t1", model: M, ...RO },
+					{ agent: "b", task: "t2", cwd: "/per/task", maxRuntimeMs: 99, model: M, ...RO },
 				],
 			},
 			stubCtx,
@@ -198,7 +205,7 @@ describe("createRun", () => {
 		);
 
 		expect(
-			m.createRun({ agent: "a", task: "t", tasks: [{ agent: "b", task: "t2", model: M }] }, stubCtx).run.mode,
+			m.createRun({ agent: "a", task: "t", tasks: [{ agent: "b", task: "t2", model: M, ...RO }] }, stubCtx).run.mode,
 		).toBe("parallel");
 	});
 	test("duplicate ids rejected", () => {
@@ -242,8 +249,8 @@ describe("cancel", () => {
 		const { run } = m.createRun(
 			{
 				tasks: [
-					{ agent: "a", task: "t1", model: M },
-					{ agent: "b", task: "t2", needs: ["task_1"], model: M },
+					{ agent: "a", task: "t1", model: M, ...RO },
+					{ agent: "b", task: "t2", needs: ["task_1"], model: M, ...RO },
 				],
 			},
 			stubCtx,
@@ -259,7 +266,7 @@ describe("cancel", () => {
 	test("cancelRun on unknown or finished run is a no-op", () => {
 		const m = makeManager();
 		expect(m.cancelRun("nope")).toEqual({ aborted: 0 });
-		const { run } = m.createRun({ tasks: [{ agent: "a", task: "t1", model: M }] }, stubCtx);
+		const { run } = m.createRun({ tasks: [{ agent: "a", task: "t1", model: M, ...RO }] }, stubCtx);
 		m.cancelRun(run.id);
 		expect(m.cancelRun(run.id)).toEqual({ aborted: 0 });
 	});
@@ -268,8 +275,8 @@ describe("cancel", () => {
 		const { run } = m.createRun(
 			{
 				tasks: [
-					{ id: "x", agent: "a", task: "t1", model: M },
-					{ id: "y", agent: "b", task: "t2", model: M },
+					{ id: "x", agent: "a", task: "t1", model: M, ...RO },
+					{ id: "y", agent: "b", task: "t2", model: M, ...RO },
 				],
 			},
 			stubCtx,
@@ -281,14 +288,14 @@ describe("cancel", () => {
 	});
 	test("awaitRun on a settled run resolves immediately", async () => {
 		const m = makeManager();
-		const { run } = m.createRun({ tasks: [{ agent: "a", task: "t1", model: M }] }, stubCtx);
+		const { run } = m.createRun({ tasks: [{ agent: "a", task: "t1", model: M, ...RO }] }, stubCtx);
 		m.cancelRun(run.id);
 		const snap = await m.awaitRun(run.id);
 		expect(snap?.run?.status).toBe("aborted");
 	});
 	test("every parked awaiter resolves on settle (no chain, no starvation)", async () => {
 		const m = makeManager();
-		const { run } = m.createRun({ tasks: [{ agent: "a", task: "t1", model: M }] }, stubCtx);
+		const { run } = m.createRun({ tasks: [{ agent: "a", task: "t1", model: M, ...RO }] }, stubCtx);
 		const waits = [m.awaitRun(run.id), m.awaitRun(run.id), m.awaitRun(run.id)];
 		m.cancelRun(run.id);
 		const settled = await Promise.all(waits);
@@ -301,7 +308,7 @@ describe("cancel", () => {
 		writeFileSync(sessionFile, "");
 		const ctx = { cwd: dir, hasUI: false, sessionFile } as unknown as ExtensionContext;
 		const m = makeManager();
-		m.createRun({ tasks: [{ agent: "a", task: "keep me", model: M }] }, ctx);
+		m.createRun({ tasks: [{ agent: "a", task: "keep me", model: M, ...RO }] }, ctx);
 		(m as unknown as { persist: (c: ExtensionContext) => void }).persist(ctx);
 		await new Promise((r) => setTimeout(r, 50));
 		const saved = existsSync(sidecar) ? readFileSync(sidecar, "utf8") : "";
@@ -315,7 +322,7 @@ describe("cancel", () => {
 	});
 	test("a delivered reply is consumed once (identity-tagged entry clears itself)", async () => {
 		const m = makeManager();
-		const { run } = m.createRun({ tasks: [{ agent: "a", task: "t1", model: M }] }, stubCtx);
+		const { run } = m.createRun({ tasks: [{ agent: "a", task: "t1", model: M, ...RO }] }, stubCtx);
 
 		const waiting = (
 			m as unknown as { awaitParentReply: (r: string, t: string, ms?: number) => Promise<string> }
@@ -326,7 +333,7 @@ describe("cancel", () => {
 	});
 	test("clearRuns releases parked awaits instead of hanging them", async () => {
 		const m = makeManager();
-		const { run } = m.createRun({ tasks: [{ agent: "a", task: "t1", model: M }] }, stubCtx);
+		const { run } = m.createRun({ tasks: [{ agent: "a", task: "t1", model: M, ...RO }] }, stubCtx);
 		const waiting = m.awaitRun(run.id);
 		m.clearRuns();
 		const settled = await waiting;
@@ -334,7 +341,7 @@ describe("cancel", () => {
 	});
 	test("cancelRun releases a child parked on ask_parent", async () => {
 		const m = makeManager();
-		const { run } = m.createRun({ tasks: [{ agent: "a", task: "t1", model: M }] }, stubCtx);
+		const { run } = m.createRun({ tasks: [{ agent: "a", task: "t1", model: M, ...RO }] }, stubCtx);
 
 		const waiting = new Promise<string>((resolve) => {
 			(m as unknown as { pendingReplies: Map<string, { resolve: (m: string) => void }> }).pendingReplies.set(
@@ -348,13 +355,94 @@ describe("cancel", () => {
 	});
 });
 
+describe("tool allowance is stated, not defaulted", () => {
+	test("a spawn naming no tools/write is refused with the three ways to satisfy it", () => {
+		const m = makeManager();
+		expect(() => m.createRun({ agent: "a", task: "t", model: M }, stubCtx)).toThrow(/tool allowance/i);
+	});
+	test("the refusal names each acceptable form so the leader can retry without guessing", () => {
+		const m = makeManager();
+		let message = "";
+		try {
+			m.createRun({ agent: "a", task: "t", model: M }, stubCtx);
+		} catch (err) {
+			message = err instanceof Error ? err.message : String(err);
+		}
+		expect(message).toContain("write: true");
+		expect(message).toContain("write: false");
+		expect(message).toContain("tools");
+	});
+	test("an empty tools list is not an allowance — it is silence wearing a list", () => {
+		const m = makeManager();
+		expect(() => m.createRun({ agent: "a", task: "t", model: M, tools: [] }, stubCtx)).toThrow(/tool allowance/i);
+	});
+	test("each of the three explicit forms satisfies the gate", () => {
+		const m = makeManager();
+		for (const allowance of [{ write: false }, { write: true }, { tools: ["read", "grep"] }]) {
+			expect(m.createRun({ agent: "a", task: "t", model: M, ...allowance }, stubCtx).run.tasks[0]?.tools).toBeDefined();
+		}
+	});
+	test("write:false still resolves to the read-only toolset, unchanged", () => {
+		const m = makeManager();
+		const tools = m.createRun({ agent: "a", task: "t", model: M, write: false }, stubCtx).run.tasks[0]?.tools ?? [];
+		expect(tools).toEqual(expect.arrayContaining(["read", "grep", "find", "ls"]));
+		expect(tools).not.toContain("bash");
+		expect(tools).not.toContain("write");
+	});
+	test("write:true still resolves the write toolset and earns worktree isolation", () => {
+		const m = makeManager();
+		const tools = m.createRun({ agent: "a", task: "t", model: M, write: true }, stubCtx).run.tasks[0]?.tools ?? [];
+		expect(tools).toEqual(expect.arrayContaining(["bash", "edit", "write"]));
+	});
+	test("the stated allowance decides isolation, not the default it used to fall back to", () => {
+		// The seam between the resolved toolset and where the child runs: a read-only task must not be
+		// handed a worktree, and a tools:-stated write task must be — including without `write: true`.
+		const m = makeManager();
+		const resolved = (p: Record<string, unknown>) =>
+			m.createRun({ agent: "a", task: "t", model: M, ...p }, stubCtx).run.tasks[0]?.tools ?? [];
+
+		expect(earnsIsolation(resolved({ write: true }))).toBe(true);
+		expect(earnsIsolation(resolved({ tools: ["bash", "edit", "write"] }))).toBe(true);
+		expect(earnsIsolation(resolved({ tools: ["read", "grep", "bash"] }))).toBe(true);
+		expect(earnsIsolation(resolved({ write: false }))).toBe(false);
+		expect(earnsIsolation(resolved({ tools: ["read", "grep", "find", "ls"] }))).toBe(false);
+	});
+	test("talk tools alone never earn isolation", () => {
+		// Children always carry talk tools; if they counted, every task would be isolated.
+		const m = makeManager();
+		const readOnly = m.createRun({ agent: "a", task: "t", model: M, write: false }, stubCtx).run.tasks[0]?.tools ?? [];
+		expect(readOnly.length).toBeGreaterThan(0);
+		expect(earnsIsolation(readOnly)).toBe(false);
+	});
+	test("the refusal is per-task and names the offending task, not the whole run", () => {
+		const m = makeManager();
+		expect(() =>
+			m.createRun(
+				{
+					tasks: [
+						{ id: "alpha", agent: "a", task: "t1", model: M, write: false },
+						{ id: "beta", agent: "b", task: "t2", model: M },
+					],
+				},
+				stubCtx,
+			),
+		).toThrow(/beta/);
+	});
+	test("an unresolvable model is still reported before the allowance", () => {
+		// Both are missing; the model refusal is the existing contract and must keep firing first.
+		const m = makeManager();
+		expect(() => m.createRun({ agent: "a", task: "t" }, stubCtx)).toThrow(/no model specified/);
+	});
+});
+
 describe("tool precedence (issue #3)", () => {
-	const src = readFileSync(new URL("../src/manager.ts", import.meta.url), "utf8");
 	test("explicit tools:/write: win over a matched file's tools; file only narrows the default", () => {
-		expect(src).toMatch(/const explicitTools = input\.tools \?\? \(input\.write \? WRITE_TOOLS : undefined\);/);
-		expect(src).toMatch(/const baseTools = explicitTools \?\? \(fileTools\?\.length \? fileTools : allowedTools\);/);
+		const m = makeManager();
+		const { run } = m.createRun({ agent: "a", task: "t", model: M, tools: ["read"] }, stubCtx);
+		expect(run.tasks[0]?.tools).toEqual(expect.arrayContaining(["read"]));
 	});
 	test("an overridden file's tools are surfaced on the task, not silently dropped", () => {
+		const src = readFileSync(new URL("../src/manager.ts", import.meta.url), "utf8");
 		expect(src).toMatch(/task\.toolsNote = `explicit tools overrode agent-file tools/);
 	});
 });
@@ -362,7 +450,7 @@ describe("tool precedence (issue #3)", () => {
 describe("resumeTask", () => {
 	function seeded(status: "failed" | "completed" | "running", sessionFile?: string) {
 		const m = makeManager();
-		const { run } = m.createRun({ agent: "a", task: "t", model: M }, stubCtx);
+		const { run } = m.createRun({ agent: "a", task: "t", model: M, ...RO }, stubCtx);
 		const task = run.tasks[0]!;
 		task.status = status;
 		task.sessionFile = sessionFile;
@@ -478,6 +566,48 @@ describe("listSelectableModels", () => {
 		expect(renderModelCatalog(catalog).content[0]!.text).toBe(
 			"Enabled subagent models (1):\n- `enabled/allowed` · 100 ctx · thinking: off | medium · price: $0.14 in / $0.28 out per MTok",
 		);
+	});
+
+	test("adds validated user catalog advice without changing the Pi-scoped list", () => {
+		const enabled = {
+			provider: "enabled",
+			id: "allowed",
+			name: "Allowed",
+			reasoning: false,
+			contextWindow: 100,
+			cost: { input: 0.14, output: 0.28, cacheRead: 0, cacheWrite: 0 },
+		};
+		const excluded = {
+			provider: "available",
+			id: "but-not-enabled",
+			name: "Excluded",
+			reasoning: false,
+			contextWindow: 200,
+		};
+		const ctx = {
+			...withRegistry([enabled, excluded]),
+			scopedModels: [{ model: enabled }],
+		} as unknown as ExtensionContext;
+		const catalog = applyCatalogAdvice(listSelectableModels(ctx), {
+			default: "enabled/allowed",
+			note: "Choose a lower-cost model for routine work.",
+			path: "test",
+		});
+		const rendered = renderModelCatalog(catalog);
+
+		expect(catalog.scope).toBe("session");
+		expect(catalog.models.map((model) => model.reference)).toEqual(["enabled/allowed"]);
+		expect(rendered.details).toEqual(catalog);
+		expect(rendered.content[0]!.text).toContain("Suggested model: `enabled/allowed`");
+		expect(rendered.content[0]!.text).toContain("pass `model` explicitly");
+		expect(rendered.content[0]!.text).toContain("Note: Choose a lower-cost model for routine work.");
+
+		const invalidDefault = applyCatalogAdvice(listSelectableModels(ctx), {
+			default: "available/but-not-enabled",
+			path: "test",
+		});
+		expect(invalidDefault.preferredDefault).toBeUndefined();
+		expect(invalidDefault.configError).toContain("not enabled for this session");
 	});
 
 	test("names a collision when every enabled reference is withheld", () => {

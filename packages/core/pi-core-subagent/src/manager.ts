@@ -66,6 +66,31 @@ const PARKED_MSG_CAP = 24;
 const READONLY_TOOLS = ["read", "grep", "find", "ls"];
 const WRITE_TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write"];
 const WRITE_CAPABLE = ["bash", "edit", "write"];
+
+/**
+ * Whether a resolved toolset earns worktree isolation. The child's own tools decide: a child that can
+ * only read cannot leave changes to isolate. This is the seam between "what the leader allowed" and
+ * "where the child runs", so it is stated once and read by both the spawn path and its test.
+ */
+export function earnsIsolation(tools: readonly string[]): boolean {
+	return tools.some((t) => WRITE_CAPABLE.includes(t));
+}
+
+/**
+ * The toolset a child actually receives, derived once from a stated allowance. Callers that have
+ * already gated on `chooseToolAllowance` use this; it never invents a default, so an ungated caller
+ * gets the read-only list only because `write: false` was stated.
+ */
+function resolveToolset(
+	file: { tools?: string[] } | undefined,
+	inline: { tools?: string[]; write?: boolean },
+): string[] {
+	const allowance = chooseToolAllowance(file, inline);
+	if (allowance.tools?.length) return allowance.tools;
+	// Only reachable when an allowance was stated or an agent file supplied `tools`; the spawn gate
+	// refuses the unstated case before a child is created.
+	return allowance.write ? WRITE_TOOLS : READONLY_TOOLS;
+}
 const SAFE_TASK_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const WIDGET_THROTTLE_MS = 150;
 
@@ -144,6 +169,33 @@ interface ModelChoice {
 	/** Set when an agent file supplied the model, so messages can say where it came from. */
 	sourceFile?: string;
 }
+/** The three ways a task can state its tool allowance. Silence is not one of them. */
+export const TOOL_ALLOWANCE_FORMS =
+	"`write: true` for the write toolset, `write: false` for read-only, or `tools: [...]` for an explicit allowlist";
+
+/**
+ * Single owner of the tool-allowance rule: a task states `tools`, `write`, or an agent file whose
+ * frontmatter declares `tools`; otherwise the spawn is refused. Every caller that resolves a child
+ * toolset routes through this, so a new entry point cannot quietly reintroduce a default.
+ *
+ * An empty `tools` array is treated as absent: it grants nothing, so accepting it would let
+ * `tools: []` read as a stated choice while resolving the same open question as silence.
+ *
+ * The read-only toolset is still what `write: false` yields — the change is that the leader must
+ * say so rather than receive it because nothing was said. A read-only child cannot run the
+ * `Verify:` command the extension asks every task for, so an unstated toolset failed late and
+ * expensively: after a full spawn.
+ */
+export function chooseToolAllowance(
+	file: { tools?: string[]; path?: string } | undefined,
+	inline: { tools?: string[]; write?: boolean },
+): { tools?: string[]; write?: boolean; sourceFile?: string } {
+	if (inline.tools?.length) return { tools: inline.tools };
+	if (inline.write !== undefined) return { write: inline.write };
+	if (file?.tools?.length) return { tools: file.tools, sourceFile: file.path };
+	return {};
+}
+
 /**
  * Single owner of the model-precedence rule: a matched agent file's `model` wins over the inline
  * one. Both the pre-creation check and the spawn resolve through this, so the two can never disagree
@@ -858,15 +910,13 @@ export class SubagentManager {
 		const prompt = file?.body ?? input.prompt?.trim();
 		const thinking = input.thinking;
 
-		const allowedTools = input.write ? WRITE_TOOLS : READONLY_TOOLS;
-		const fileTools = file?.tools?.filter((t) => allowedTools.includes(t));
-		const explicitTools = input.tools ?? (input.write ? WRITE_TOOLS : undefined);
-		const baseTools = explicitTools ?? (fileTools?.length ? fileTools : allowedTools);
-		if (explicitTools && fileTools?.length)
-			task.toolsNote = `explicit tools overrode agent-file tools (${fileTools.join(", ")})`;
+		const inlineStated = Boolean(input.tools?.length) || input.write !== undefined;
+		const baseTools = resolveToolset(file, input);
+		if (inlineStated && file?.tools?.length)
+			task.toolsNote = `explicit tools overrode agent-file tools (${file.tools.join(", ")})`;
 		const tools = [...baseTools, ...CHILD_TALK_TOOLS];
 
-		const canWrite = baseTools.some((t) => WRITE_CAPABLE.includes(t));
+		const canWrite = earnsIsolation(baseTools);
 
 		let model: Model<Api> | undefined;
 		try {
@@ -1270,6 +1320,14 @@ export class SubagentManager {
 					{ cause: err },
 				);
 			}
+			// Gated last, so the model contract above reports exactly as it did before: a spawn wrong
+			// about both is told about the model first, then the toolset on the retry.
+			const allowance = chooseToolAllowance(file, input);
+			if (allowance.tools === undefined && allowance.write === undefined) {
+				throw new Error(
+					`Task ${input.id ?? `task_${i + 1}`} (${input.agent}): no tool allowance stated. Every subagent task must state what its child may do — neither \`tools\`, \`write\`, nor an agent-file \`tools\` was given. Pass ${TOOL_ALLOWANCE_FORMS}. There is no default.`,
+				);
+			}
 		}
 
 		const run: RunSnapshot = {
@@ -1289,7 +1347,7 @@ export class SubagentManager {
 				needs: edges[index],
 				model: input.model,
 				thinking: input.thinking,
-				tools: input.tools ?? (input.write ? WRITE_TOOLS : READONLY_TOOLS),
+				tools: resolveToolset(resolveAgentFile(input.agent, input.task, input.cwd ?? ctx.cwd, getAgentDir()), input),
 				toolCalls: 0,
 				usage: emptyUsage(),
 			})),

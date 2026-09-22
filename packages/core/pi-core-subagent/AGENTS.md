@@ -39,6 +39,8 @@ correctness, disable it here and say why. Keep the file `.jsonc` — the comment
 - `src/schemas.ts` — the tool's accepted input vocabulary (task fields, thinking levels).
 - `src/types.ts` — shared constants (`DEFAULT_CONCURRENCY`, `MAX_CONCURRENCY`, `MAX_TASKS`) and
   snapshot shapes. **Leaf module: it imports nothing local**, which is what keeps the graph acyclic.
+- `src/modelconfig.ts` — optional user-owned catalog advice; it can annotate a resolved catalog but
+  never choose a task model or alter Pi's model scope.
 - `test/` — one file per concern; `manager.test.ts` covers spawn/resume/cancel and the model
   contract.
 
@@ -50,6 +52,12 @@ correctness, disable it here and say why. Keep the file `.jsonc` — the comment
   time in a render path.
 - Model precedence has one owner: `chooseModel()` in `manager.ts`. Spawn and resume both route
   through it; re-deriving the rule is how resume once bypassed the required-model guard.
+- Tool-allowance precedence has one owner: `chooseToolAllowance()` in `manager.ts`. Both the
+  createRun gate and `resolveToolset()` read it, so the toolset a child receives cannot disagree
+  with the allowance that was checked. A new entry point must call it, not re-derive it.
+- Whether a task earns a worktree has one owner: `earnsIsolation()` in `manager.ts`, read by the
+  spawn path. It takes the *resolved* toolset, so the allowance decision and the isolation decision
+  cannot drift apart — the earlier inline `baseTools.some(...)` had no test on either side.
 - Thinking levels come from pi's `getSupportedThinkingLevels` (`@earendil-works/pi-ai/compat`),
   never a local list. `THINKING_LEVELS` in `schemas.ts` is the accepted *input* vocabulary and is
   typed `satisfies readonly ModelThinkingLevel[]` so upstream drift is a compile error.
@@ -57,9 +65,16 @@ correctness, disable it here and say why. Keep the file `.jsonc` — the comment
   `{ isError: false }` for any `execute` that does not throw, discarding a returned `isError: true`.
 - Every subagent task must name a `model`; there is no default. The error names passable
   references. Keep it that way — an inherited session model makes "which model ran" unknowable.
+- Every subagent task must also **state its tool allowance** — `write: true`, `write: false`, or
+  `tools: [...]` (or a matched agent file's `tools` frontmatter). There is no default toolset. One
+  owner: `chooseToolAllowance()` in `manager.ts`, read by the spawn gate and by `resolveToolset()`.
+  An empty `tools: []` counts as unstated. The gate runs **after** the model checks so the model
+  contract keeps reporting first. Resume is safe without a gate of its own because it always
+  reconstructs a boolean `write` from the recorded tools.
 - `subagent_models` is scoped to `ctx.scopedModels` (pi's resolution of `enabledModels` and
   `--models`), falling back to all available only when nothing is scoped; each entry carries pi's
-  own per-Mtok cost. Do not widen it to `getAvailable()` — that offers models the session cannot use.
+  own per-Mtok cost. Apply user catalog advice only after this list is resolved. Do not widen it to
+  `getAvailable()` — that offers models the session cannot use.
 - **This extension is loaded into the running pi session, so edits here do not affect the session
   that made them.** An in-session `subagent_models` call returns the copy loaded at startup. Verify
   a change in a NEW process (`pi -t subagent_models --print ...`), or it will look like the edit did

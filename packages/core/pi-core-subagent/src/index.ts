@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import {
 	compactLines,
@@ -11,6 +11,7 @@ import {
 } from "./format.ts";
 import { waveNotation } from "./graph.ts";
 import { cloneRun, listSelectableModels, type ParkedMsg, SubagentManager } from "./manager.ts";
+import { applyCatalogAdvice, loadCatalogAdvice } from "./modelconfig.ts";
 import { createPeekPane, type PeekTask } from "./peek.ts";
 import {
 	AwaitParam,
@@ -137,14 +138,14 @@ export default function (pi: ExtensionAPI) {
 		name: "subagent_models",
 		label: "Subagent Models",
 		description:
-			"List the models enabled for subagent tasks, each with an exact `model` value, supported thinking levels, context window, and Pi catalogue pricing. Call this before the first subagent() call, and again whenever a spawn is rejected for a missing or unusable model. When no model scope is configured, Pi treats every available model as enabled. A listed reference resolves in this session, but a matched agent file or live credential check can still refuse it.",
+			"List the models enabled for subagent tasks, each with an exact `model` value, supported thinking levels, context window, Pi catalogue pricing, and any configured user-owned suggestion or note. Call this before the first subagent() call, and again whenever a spawn is rejected for a missing or unusable model. When no model scope is configured, Pi treats every available model as enabled. A listed reference resolves in this session, but a matched agent file or live credential check can still refuse it. Advice never supplies a task model.",
 		promptSnippet: "List the models enabled for subagent tasks, before choosing one.",
 		promptGuidelines: [
 			"Call subagent_models before the first subagent() call: every task must name a `model`, and there is no default to fall back on.",
 		],
 		parameters: ModelsParam,
 		async execute(_id, _params, _signal, _onUpdate, ctx) {
-			return renderModelCatalog(listSelectableModels(ctx));
+			return renderModelCatalog(applyCatalogAdvice(listSelectableModels(ctx), loadCatalogAdvice(getAgentDir())));
 		},
 	});
 
@@ -153,16 +154,17 @@ export default function (pi: ExtensionAPI) {
 		label: "Subagent",
 
 		description:
-			"Run isolated subagents (own context, own session) in the background: returns a runId immediately, completion notifies you. One call = one agent (`agent`+`task`) or many (`tasks`, or `chain` with `{previous}`). `needs` edges gate tasks and prepend upstream outputs to their prompts. Every task MUST name its `model` explicitly (or match an agent file that declares one) — a task without a model is rejected and the error names the models you can pass; nothing is inherited by default. Call `subagent_models` for the authoritative list before choosing. A user agent file (`.agents/agents`, `.claude/agents`, `.pi/agents`; project dirs, then home) whose `description` matches the goal is authoritative: body = system prompt, frontmatter `model`/`tools` apply, but explicit per-call `tools`/`write` override the file's tools. Write agents get an isolated git worktree; the result reports the branch. Children always carry talk tools (ask/notify the leader, message siblings).",
+			"Run isolated subagents (own context, own session) in the background: returns a runId immediately, completion notifies you. One call = one agent (`agent`+`task`) or many (`tasks`, or `chain` with `{previous}`). `needs` edges gate tasks and prepend upstream outputs to their prompts. Every task MUST state its `model` explicitly (or match an agent file that declares one) — a task without a model is rejected and the error names the models you can pass; nothing is inherited by default. Call `subagent_models` for the authoritative list before choosing. Every task MUST also state its tool allowance: `write: true` (bash/edit/write), `write: false` (read-only), or `tools: [...]`; a task stating none is rejected — there is no default toolset. A user agent file (`.agents/agents`, `.claude/agents`, `.pi/agents`; project dirs, then home) whose `description` matches the goal is authoritative: body = system prompt, frontmatter `model`/`tools` apply, but explicit per-call `tools`/`write` override the file's tools. Write agents get an isolated git worktree; the result reports the branch. Children always carry talk tools (ask/notify the leader, message siblings).",
 		promptSnippet: "Define and delegate work to specialized subagents.",
 		promptGuidelines: [
 			"Call subagent_models before your first subagent() call: every task must set `model` explicitly, unless a matched agent file declares one. There is no default model — omitting it is a hard error, not an inheritance of your session model.",
+			"Every task must also state its tool allowance: `write: true` for bash/edit/write, `write: false` for read-only, or `tools: [...]`. Omitting all three is a hard error — there is no default toolset. A read-only child cannot run its own `Verify:` command, so state the allowance deliberately rather than by habit.",
 			"Use subagent when independent review, testing, research, or parallel analysis improves quality.",
 			"Batch every sub-task in ONE call: subagent({ tasks: [...] }) — never multiple parallel subagent calls.",
 			"Declare ordering with `needs` edges on the tasks, never by splitting into separate calls; dependents receive upstream outputs automatically — do not restate them. Prefer flat `tasks` (plain parallel); add `needs` only when ordering genuinely matters.",
 			"End each task with a runnable check, e.g. 'Verify: bun test'. A subagent's claim of success is not evidence.",
 			"Write agents work in an isolated git worktree; their changes land on a branch — review the diff, then merge with `git merge --no-ff <branch>`. Never leave a worktree branch unmerged at the end of the task.",
-			"Define each agent inline: invented name, focused system prompt, read-only by default (write:true to edit), and an explicit `model` — omitting `model` is a hard error, not an inheritance of your session model. A matched agent file takes over (see description); matching is by description, not name — name the agent whatever fits the goal.",
+			"Define each agent inline: invented name, focused system prompt, an explicit tool allowance (`write: true`/`write: false`/`tools: [...]`), and an explicit `model` — omitting either is a hard error, not a default. A matched agent file takes over (see description); matching is by description, not name — name the agent whatever fits the goal.",
 			"Right after spawning, call subagent_status(runId) ONCE before any other work — a child that died on spawn (or never started) is invisible until far later otherwise. If it shows a task failed/never started, fix or respawn immediately.",
 			"Never block with nothing to do: if you have no work left after spawning, end your turn — completion notifies you and wakes a fresh turn with the results. await_subagent/autoAwait while idle only burns time and tokens.",
 			"Task lifecycle messages (completed, failed, aborted) and subagent intercom messages all arrive as steering messages — they land at your next model boundary, so you see them mid-turn instead of after you stop working.",

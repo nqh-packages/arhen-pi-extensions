@@ -23,7 +23,8 @@ const TaskItem = Type.Object({
 	prompt: Type.Optional(Type.String({ description: "System prompt defining this agent's behavior" })),
 	write: Type.Optional(
 		Type.Boolean({
-			description: "true = write toolset (adds bash, edit, write); default false = read-only (read, grep, find, ls)",
+			description:
+				"Write toolset (adds bash, edit, write). Required unless `tools` or a matched agent file supplies `tools`: a task that states no allowance is rejected — there is no default. `false` = read-only (read, grep, find, ls).",
 		}),
 	),
 	model: Type.Optional(
@@ -34,7 +35,12 @@ const TaskItem = Type.Object({
 	),
 	thinking: Type.Optional(StringEnum(THINKING_LEVELS, { description: "Thinking level override" })),
 	cwd: Type.Optional(Type.String({ description: "Working directory (default: current project)" })),
-	tools: Type.Optional(Type.Array(Type.String(), { description: "Explicit tool allowlist (overrides the toolset)" })),
+	tools: Type.Optional(
+		Type.Array(Type.String(), {
+			description:
+				"Explicit tool allowlist, overriding `write` and any agent-file tools. Required unless `write` or a matched agent file supplies `tools`. Empty is refused — it states nothing.",
+		}),
+	),
 	maxRuntimeMs: Type.Optional(Type.Number({ description: "Per-task timeout (ms)" })),
 	needs: Type.Optional(
 		Type.Array(Type.String(), {
@@ -47,9 +53,17 @@ export const SubagentParams = Type.Object({
 	agent: Type.Optional(Type.String({ minLength: 1, description: "Name you invent for this subagent (single mode)" })),
 	task: Type.Optional(Type.String({ minLength: 1, description: "Task (single mode)" })),
 	prompt: Type.Optional(Type.String({ description: "System prompt for this agent (single mode)" })),
-	write: Type.Optional(Type.Boolean({ description: "true = write toolset; default false = read-only (single mode)" })),
+	write: Type.Optional(
+		Type.Boolean({
+			description:
+				"Write toolset (adds bash, edit, write); `false` = read-only (single mode). Required unless `tools` or a matched agent file supplies `tools` — there is no default.",
+		}),
+	),
 	tools: Type.Optional(
-		Type.Array(Type.String(), { description: "Explicit tool allowlist (overrides the toolset) (single mode)" }),
+		Type.Array(Type.String(), {
+			description:
+				"Explicit tool allowlist, overriding `write` and any agent-file tools (single mode). Required unless `write` or a matched agent file supplies `tools`. Empty is refused — it states nothing.",
+		}),
 	),
 	tasks: Type.Optional(Type.Array(TaskItem, { description: "Parallel tasks" })),
 	chain: Type.Optional(Type.Array(TaskItem, { description: "Sequential tasks; {previous} = prior output" })),
