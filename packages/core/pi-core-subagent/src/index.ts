@@ -169,7 +169,7 @@ export default function (pi: ExtensionAPI) {
 			"Never block with nothing to do: if you have no work left after spawning, end your turn — completion notifies you and wakes a fresh turn with the results. await_subagent/autoAwait while idle only burns time and tokens.",
 			"Task lifecycle messages (completed, failed, aborted) and subagent intercom messages all arrive as steering messages — they land at your next model boundary, so you see them mid-turn instead of after you stop working.",
 			"autoAwait:true only when this SAME turn must consume the result immediately. await_subagent is for syncing with your own parallel work — not the default next step after a spawn.",
-			"A task that failed mid-work (provider error, rate limit, timeout) keeps its session file and branch: resume_subagent(runId, taskId, model?) revives it with full context — prefer that over respawning. Respawn only when it never started (no session file).",
+			"A failed or aborted task keeps its session file and branch: resume_subagent(runId, taskId, model?) retries in the same context. A completed task can also continue there with a new `message`, including after reopening this parent session. Never treat a missing child session or worktree branch as a fresh start.",
 		],
 		parameters: SubagentParams,
 		executionMode: "parallel",
@@ -407,7 +407,7 @@ export default function (pi: ExtensionAPI) {
 		name: "resume_subagent",
 		label: "Resume Subagent",
 		description:
-			"Revive a failed/aborted task in its original session (full context + worktree branch preserved). Optional `model` swaps provider (e.g. after a rate limit); optional `message` replaces the default 'recap and continue' prompt. Refuses tasks that never started — respawn those.",
+			"Continue a settled task in its original child session (prior model-visible context and worktree branch preserved). Completed tasks require a new `message`; failed/aborted tasks may omit it to retry. The same run/task gets the latest result and recorded tools; finished dependents are not rerun. Works after reopening the same saved parent session. Refuses missing sessions and missing or merged worktree branches rather than starting fresh or editing in place. Optional `model` override changes providers explicitly.",
 		parameters: ResumeParam,
 		async execute(_id, params, _signal, _onUpdate, ctx) {
 			const { runId, taskId, message, model } = params as {
@@ -416,14 +416,15 @@ export default function (pi: ExtensionAPI) {
 				message?: string;
 				model?: string;
 			};
+			const wasCompleted = manager.getRun(runId)?.tasks.find((task) => task.id === taskId)?.status === "completed";
 			const res = manager.resumeTask(runId, taskId, ctx, { message, model });
-			if (!res.ok) return { content: [{ type: "text", text: res.reason }], isError: true, details: {} };
+			if (!res.ok) throw new Error(res.reason);
 			const run = manager.getRun(runId);
 			return {
 				content: [
 					{
 						type: "text",
-						text: `Resumed ${runId}/${taskId} (${res.task.agent})${model ? ` on ${model}` : ""} from ${res.task.sessionFile}${res.task.branch ? `, branch ${res.task.branch}` : ""}.\nNext: subagent_status("${runId}") to confirm it is running; completion will notify you.`,
+						text: `${wasCompleted ? "Continued" : "Resumed"} ${runId}/${taskId} (${res.task.agent})${model ? ` on ${model}` : ""} in its original session ${res.task.sessionFile}${res.task.branch ? `, branch ${res.task.branch}` : ""}.\nNext: subagent_status("${runId}") to confirm it is running; completion will notify you.`,
 					},
 				],
 				details: { run: run ? cloneRun(run) : undefined },

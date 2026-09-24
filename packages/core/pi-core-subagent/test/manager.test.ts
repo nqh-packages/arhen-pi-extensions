@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { appendFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, type ExtensionContext, SessionManager } from "@earendil-works/pi-coding-agent";
 import { renderModelCatalog } from "../src/format.ts";
 import {
 	chooseModel,
@@ -552,6 +553,28 @@ describe("tool precedence (issue #3)", () => {
 });
 
 describe("resumeTask", () => {
+	function savedChild(cwd: string, parentSession?: string) {
+		const session = SessionManager.create(cwd, cwd, { parentSession });
+		session.appendMessage({ role: "user", content: "Remember the blue marker", timestamp: Date.now() });
+		session.appendMessage({
+			role: "assistant",
+			content: [{ type: "text", text: "The marker is blue." }],
+			api: "anthropic-messages",
+			provider: "fixture",
+			model: "fixture-model",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		});
+		return { sessionId: session.getSessionId(), sessionFile: session.getSessionFile()! };
+	}
 	function seeded(status: "failed" | "completed" | "running", sessionFile?: string) {
 		const m = makeManager();
 		const { run } = m.createRun({ agent: "a", task: "t", model: M, ...RO }, stubCtx);
@@ -565,9 +588,9 @@ describe("resumeTask", () => {
 		// Resume starts a run through runChild, not createRun, so it needs the same contract:
 		// without it a settled task silently inherited the session model at resolveChildModel.
 		const dir = mkdtempSync(join(tmpdir(), "resume-"));
-		const file = join(dir, "s.jsonl");
-		writeFileSync(file, "");
-		const { m, run, task } = seeded("failed", file);
+		const child = savedChild(dir);
+		const { m, run, task } = seeded("failed", child.sessionFile);
+		task.sessionId = child.sessionId;
 		task.model = undefined;
 		const res = m.resumeTask(run.id, task.id, stubCtx);
 		expect(res.ok).toBe(false);
@@ -577,14 +600,15 @@ describe("resumeTask", () => {
 		}
 		rmSync(dir, { recursive: true, force: true });
 	});
-	test("a resume that supplies a model is allowed even when none was recorded", () => {
+	test("a resume that supplies a model is allowed even when none was recorded", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "resume2-"));
-		const file = join(dir, "s.jsonl");
-		writeFileSync(file, "");
-		const { m, run, task } = seeded("failed", file);
+		const child = savedChild(dir);
+		const { m, run, task } = seeded("failed", child.sessionFile);
+		task.sessionId = child.sessionId;
 		task.model = undefined;
 		const res = m.resumeTask(run.id, task.id, stubCtx, { model: M });
 		expect(res.ok).toBe(true);
+		await m.awaitRun(run.id, 2000);
 		rmSync(dir, { recursive: true, force: true });
 	});
 	test("refuses never-started task (no session file) — respawn is the right move", () => {
@@ -604,19 +628,210 @@ describe("resumeTask", () => {
 		expect(makeManager().resumeTask("run_x", "task_1", stubCtx).ok).toBe(false);
 		rmSync(dir, { recursive: true, force: true });
 	});
+	test("a restored parent retains the completed child's session for continuation preflight", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "resume-parent-"));
+		try {
+			const parent = SessionManager.create(dir, dir);
+			parent.appendMessage({ role: "user", content: "Delegate", timestamp: Date.now() });
+			const ctx = { ...stubCtx, cwd: dir, sessionManager: parent } as ExtensionContext;
+			const child = savedChild(dir, parent.getSessionFile()!);
+			const original = makeManager();
+			const { run } = original.createRun({ agent: "reader", task: "Read", model: M, ...RO }, ctx);
+			const task = run.tasks[0]!;
+			task.status = "completed";
+			task.sessionId = child.sessionId;
+			task.sessionFile = child.sessionFile;
+			task.provider = "fixture";
+			task.model = "fixture-model";
+			task.tools = ["read"];
+			task.finalText = "First answer";
+			run.status = "completed";
+			(original as unknown as { persist: (ctx: ExtensionContext) => void }).persist(ctx);
+			const sidecar = parent.getSessionFile()!.replace(/\.jsonl$/, ".subagents.json");
+			for (let i = 0; i < 40 && !existsSync(sidecar); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+			expect(existsSync(sidecar)).toBe(true);
+
+			const restored = makeManager();
+			await restored.restoreFromSidecar(ctx);
+			const continuation = restored.resumeTask(run.id, task.id, ctx, { message: "What was the marker?" });
+			if (!continuation.ok) throw new Error(continuation.reason);
+			const current = restored.getRun(run.id)!;
+			expect(current.tasks).toHaveLength(1);
+			expect(current.tasks[0]?.sessionId).toBe(child.sessionId);
+			expect(current.tasks[0]?.sessionFile).toBe(child.sessionFile);
+			expect(SessionManager.open(child.sessionFile).getBranch()).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ message: expect.objectContaining({ content: "Remember the blue marker" }) }),
+				]),
+			);
+			await restored.awaitRun(run.id, 2000);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+	test("incompatible model override refuses before clearing a completed result", () => {
+		const dir = mkdtempSync(join(tmpdir(), "resume-model-"));
+		try {
+			const child = savedChild(dir);
+			const { m, run, task } = seeded("completed", child.sessionFile);
+			task.sessionId = child.sessionId;
+			task.provider = "fixture";
+			task.tools = ["read"];
+			task.thinking = "high";
+			task.finalText = "Original answer";
+			const otherModel = { provider: "fixture", id: "plain", reasoning: false };
+			const ctx = {
+				...stubCtx,
+				modelRegistry: {
+					getAvailable: () => [FIXTURE_MODEL, otherModel],
+					find: (provider: string, id: string) =>
+						provider === otherModel.provider && id === otherModel.id ? otherModel : FIXTURE_MODEL,
+				},
+			} as ExtensionContext;
+			const res = m.resumeTask(run.id, task.id, ctx, { message: "More work", model: "fixture/plain" });
+			expect(res.ok).toBe(false);
+			if (!res.ok) expect(res.reason).toMatch(/does not support thinking/);
+			expect(task.finalText).toBe("Original answer");
+			expect(task.status).toBe("completed");
+			expect(run.status).toBe("completed");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+	test("completed continuation refuses an absent worktree branch without changing the result", () => {
+		const dir = mkdtempSync(join(tmpdir(), "resume-branch-"));
+		try {
+			execFileSync("git", ["init", "-q", dir]);
+			const child = savedChild(dir);
+			const { m, run, task } = seeded("completed", child.sessionFile);
+			task.cwd = dir;
+			task.sessionId = child.sessionId;
+			task.tools = ["read", "bash"];
+			task.isolation = "worktree";
+			task.branch = `subagents/${run.id}/${task.id}`;
+			task.finalText = "First answer";
+			const res = m.resumeTask(run.id, task.id, stubCtx, { message: "More work" });
+			expect(res.ok).toBe(false);
+			if (!res.ok) expect(res.reason).toMatch(/branch/);
+			expect(run.status).toBe("completed");
+			expect(task.status).toBe("completed");
+			expect(task.finalText).toBe("First answer");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+	test("failed write continuation refuses a lost worktree branch before changing the result", () => {
+		const dir = mkdtempSync(join(tmpdir(), "resume-partial-"));
+		try {
+			const child = savedChild(dir);
+			const { m, run, task } = seeded("failed", child.sessionFile);
+			task.cwd = dir;
+			task.sessionId = child.sessionId;
+			task.tools = ["read", "bash"];
+			task.isolation = "worktree";
+			task.finalText = "Partial answer";
+			const res = m.resumeTask(run.id, task.id, stubCtx);
+			expect(res.ok).toBe(false);
+			if (!res.ok) expect(res.reason).toMatch(/worktree branch/);
+			expect(task.status).toBe("failed");
+			expect(task.finalText).toBe("Partial answer");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+	test("completed continuation refuses a copied sidecar from another parent", () => {
+		const dir = mkdtempSync(join(tmpdir(), "resume-parent-mismatch-"));
+		try {
+			const firstParent = SessionManager.create(dir, dir);
+			const otherParent = SessionManager.create(dir, dir);
+			const child = savedChild(dir, firstParent.getSessionFile()!);
+			const { m, run, task } = seeded("completed", child.sessionFile);
+			task.sessionId = child.sessionId;
+			task.tools = ["read"];
+			task.provider = "fixture";
+			const ctx = { ...stubCtx, sessionManager: otherParent } as ExtensionContext;
+			const res = m.resumeTask(run.id, task.id, ctx, { message: "Continue" });
+			expect(res.ok).toBe(false);
+			if (!res.ok) expect(res.reason).toMatch(/parent session/);
+			expect(task.status).toBe("completed");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+	test("completed continuation refuses a mismatched session identity", () => {
+		const dir = mkdtempSync(join(tmpdir(), "resume-identity-"));
+		try {
+			const child = savedChild(dir);
+			const { m, run, task } = seeded("completed", child.sessionFile);
+			task.sessionId = "another-session";
+			const res = m.resumeTask(run.id, task.id, stubCtx, { message: "Continue" });
+			expect(res.ok).toBe(false);
+			if (!res.ok) expect(res.reason).toMatch(/session (identity|ID).*mismatch|does not match recorded session/i);
+			expect(run.status).toBe("completed");
+			expect(task.status).toBe("completed");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+	test("completed continuation refuses a malformed child session tail", () => {
+		const dir = mkdtempSync(join(tmpdir(), "resume-corrupt-"));
+		try {
+			const child = savedChild(dir);
+			appendFileSync(child.sessionFile, "{truncated\n");
+			const { m, run, task } = seeded("completed", child.sessionFile);
+			task.sessionId = child.sessionId;
+			const res = m.resumeTask(run.id, task.id, stubCtx, { message: "Continue" });
+			expect(res.ok).toBe(false);
+			if (!res.ok) expect(res.reason).toMatch(/malformed child session/);
+			expect(task.status).toBe("completed");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+	test("failed continuation refuses an empty child session rather than creating a new one", () => {
+		const dir = mkdtempSync(join(tmpdir(), "resume-empty-"));
+		try {
+			const file = join(dir, "child.jsonl");
+			writeFileSync(file, "");
+			const { m, run, task } = seeded("failed", file);
+			task.sessionId = "original-session";
+			const res = m.resumeTask(run.id, task.id, stubCtx);
+			expect(res.ok).toBe(false);
+			if (!res.ok) expect(res.reason).toMatch(/child session file is empty/);
+			expect(task.status).toBe("failed");
+			expect(readFileSync(file, "utf8")).toBe("");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+	test("failed continuation refuses missing recorded tools instead of defaulting to read-only", () => {
+		const dir = mkdtempSync(join(tmpdir(), "resume-tools-"));
+		try {
+			const child = savedChild(dir);
+			const { m, run, task } = seeded("failed", child.sessionFile);
+			task.sessionId = child.sessionId;
+			task.tools = undefined;
+			const res = m.resumeTask(run.id, task.id, stubCtx);
+			expect(res.ok).toBe(false);
+			if (!res.ok) expect(res.reason).toMatch(/no recorded tool allowance/);
+			expect(task.status).toBe("failed");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 	test("failed task with a session file flips to queued and the run reopens", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "resume-"));
-		const file = join(dir, "s.jsonl");
-		writeFileSync(file, "");
-		const { m, run, task } = seeded("failed", file);
+		const child = savedChild(dir);
+		const { m, run, task } = seeded("failed", child.sessionFile);
+		task.sessionId = child.sessionId;
 		task.error = "usage limit";
-		task.tools = ["read", "bash", "ask_parent"];
+		task.tools = ["read", "ask_parent"];
 		const res = m.resumeTask(run.id, task.id, { ...stubCtx, modelRegistry: undefined } as unknown as ExtensionContext);
 		expect(res.ok).toBe(true);
 		expect(run.status).toBe("running");
 		expect(["queued", "starting", "running", "failed"]).toContain(task.status);
 		expect(task.error === undefined || task.error !== "usage limit").toBe(true);
-		await new Promise((r) => setTimeout(r, 300));
+		await m.awaitRun(run.id, 2000);
 		rmSync(dir, { recursive: true, force: true });
 	});
 });

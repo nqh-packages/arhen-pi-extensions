@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { hostname, uptime } from "node:os";
 import { join, resolve } from "node:path";
@@ -38,6 +39,16 @@ function gitIn(dir: string, args: string[]): string {
 		maxBuffer: GIT_MAX_BUFFER,
 		stdio: GIT_STDIO,
 	}).trim();
+}
+
+function assertWorktreeBranch(dir: string, expected: string): void {
+	let head = "detached";
+	try {
+		head = gitIn(dir, ["symbolic-ref", "--quiet", "--short", "HEAD"]) || "detached";
+	} catch {
+		head = "detached";
+	}
+	if (head !== expected) throw new Error(`worktree HEAD is "${head}", expected ${expected}`);
 }
 
 function gitOk(root: string, args: string[]): boolean {
@@ -98,18 +109,30 @@ export function createWorktree(cwd: string, runId: string, taskId: string, baseR
 	return { root, path, branch, base };
 }
 
+export function hasUnmergedWorktreeBranch(cwd: string, branch: string): boolean {
+	if (!branch.startsWith(BRANCH_PREFIX)) return false;
+	const root = repoRoot(cwd);
+	return Boolean(
+		root &&
+			gitOk(root, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]) &&
+			!gitOk(root, ["merge-base", "--is-ancestor", branch, "HEAD"]),
+	);
+}
+
 export function attachWorktree(cwd: string, branch: string): Worktree | undefined {
 	if (!branch.startsWith(BRANCH_PREFIX)) return undefined;
 	const root = repoRoot(cwd);
 	if (!root) return undefined;
 	const container = subagentsDir(root);
 	if (!container) return undefined;
-	if (!gitOk(root, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`])) return undefined;
+	if (!hasUnmergedWorktreeBranch(cwd, branch)) return undefined;
 	const path = join(container, branch.slice(BRANCH_PREFIX.length));
+	if (existsSync(ownerFile(path))) throw new Error(`worktree ${path} has an existing owner claim`);
 	if (!worktreePaths(root)?.some((p) => samePath(p, path))) {
-		if (existsSync(path)) rmSync(path, { recursive: true, force: true });
+		if (existsSync(path)) throw new Error(`unregistered worktree path already exists: ${path}`);
 		git(root, ["worktree", "add", path, branch]);
 	}
+	assertWorktreeBranch(path, branch);
 	let base: string;
 	try {
 		base = git(root, ["merge-base", "HEAD", branch]);
@@ -130,15 +153,7 @@ export function commitWorktree(wt: Worktree, message: string): "committed" | "em
 }
 
 function commitIn(dir: string, message: string, expectBranch?: string): "committed" | "empty" {
-	if (expectBranch) {
-		let head = "detached";
-		try {
-			head = gitIn(dir, ["symbolic-ref", "--quiet", "--short", "HEAD"]) || "detached";
-		} catch {
-			head = "detached";
-		}
-		if (head !== expectBranch) throw new Error(`worktree HEAD is "${head}", expected ${expectBranch}`);
-	}
+	if (expectBranch) assertWorktreeBranch(dir, expectBranch);
 
 	gitIn(dir, ["add", "-A", "--", ".", ":(exclude)node_modules", ":(exclude,glob)**/node_modules/**"]);
 	if (gitIn(dir, ["diff", "--cached", "--name-only"]).length === 0) return "empty";
@@ -283,13 +298,27 @@ export function reapDeadWorktrees(root: string, isLive: (path: string) => boolea
 	return reaped;
 }
 
-export function claimWorktree(wt: Worktree): void {
+export function claimWorktree(wt: Worktree): () => void {
+	const path = ownerFile(wt.path);
+	const receipt = JSON.stringify({
+		pid: process.pid,
+		host: hostname(),
+		boot: bootId(),
+		at: Date.now(),
+		nonce: randomUUID(),
+	});
 	try {
-		writeFileSync(
-			ownerFile(wt.path),
-			JSON.stringify({ pid: process.pid, host: hostname(), boot: bootId(), at: Date.now() }),
-		);
-	} catch {}
+		writeFileSync(path, receipt, { flag: "wx" });
+	} catch (err) {
+		throw new Error(`Cannot claim worktree ${wt.path}: ${err instanceof Error ? err.message : String(err)}`, {
+			cause: err,
+		});
+	}
+	return () => {
+		try {
+			if (readFileSync(path, "utf8") === receipt) rmSync(path, { force: true });
+		} catch {}
+	};
 }
 
 export function ownerAlive(path: string, ownedHere?: (path: string) => boolean): boolean {

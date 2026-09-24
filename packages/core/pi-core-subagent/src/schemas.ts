@@ -117,9 +117,11 @@ export const ReplyParam = Type.Object({
 });
 export const ResumeParam = Type.Object({
 	runId: Type.String(),
-	taskId: Type.String({ description: "Failed/aborted task to revive" }),
+	taskId: Type.String({ description: "Settled task to continue in its original child session" }),
 	message: Type.Optional(
-		Type.String({ description: "Prompt delivered on resume (default: recap state, then continue the original task)" }),
+		Type.String({
+			description: "New prompt (required for completed tasks; failed/aborted tasks default to recap and retry)",
+		}),
 	),
 	model: Type.Optional(
 		Type.String({

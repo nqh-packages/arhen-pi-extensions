@@ -302,7 +302,7 @@ Background (default) + intercom — the run returns a runId immediately; you sta
 
 **Steering a running child:** while a background run is active the leader stays responsive, and you can push a message into a live child's session mid-run with `steer_subagent` — e.g. `steer_subagent({ runId, taskId, message: "Ignore tests/, only audit runtime deps" })`. The message queues as a steer if the child is mid-turn and lands at its next model boundary. Omit `taskId` to steer every still-running task in the run. Combined with `notifyPerTask`, this makes a background run feel like a live team you can redirect, not a fire-and-forget blob.
 
-**Resuming a failed child:** a child that dies mid-work (provider rate limit, timeout, network error) keeps its session JSONL and its worktree branch. `resume_subagent({ runId, taskId, model?: "openai/gpt-5", message? })` reopens that session with full context, re-attaches the branch, and prompts it to recap and continue — no respawn, no lost tokens. `model` swaps provider when the original one is exhausted. Refused for tasks that never started (no session file); those you respawn. Wait for the run to settle before resuming (the tool tells you if it hasn't).
+**Continuing a child:** `resume_subagent({ runId, taskId, message?, model? })` reopens the same child session JSONL, including its prior conversation and any compaction summary. A completed child requires a new `message` describing the next work; a failed or aborted child can omit it to recap and retry. The same run/task receives the latest result, the recorded tool allowance is reused, and completed dependents are not rerun. The tool works after reopening the same saved parent Pi session, provided its sidecar and the child's session file still exist. It never imports a child from another parent session. Wait for the run to settle before continuing. For a worktree-isolated write task, the original unmerged branch must still exist; if it was merged or deleted, continuation is refused rather than falling back to in-place edits. A task that originally ran in place continues in its recorded directory. `model` may change providers, but the existing model and thinking level remain selected when no override is given. Compaction and the selected model's finite context limit still apply.
 
 ## Tools
 
@@ -315,7 +315,7 @@ Background (default) + intercom — the run returns a runId immediately; you sta
 | `await_subagent` | block until a run finishes (optional `timeoutMs`) |
 | `reply_subagent` | answer a child's `ask_parent` question |
 | `steer_subagent` | inject a steering message into a running child's session (queues as steer if mid-turn; lands at its next model boundary) |
-| `resume_subagent` | revive a failed/aborted task in its original session (context + branch preserved); optional `model` swap and custom `message` |
+| `resume_subagent` | continue a settled task in its original session; completed tasks need a new `message`, failed/aborted tasks can use the default retry prompt |
 | `subagent_cancel` | abort a running/queued run |
 
 ### Per-task fields

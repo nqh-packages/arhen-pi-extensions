@@ -54,6 +54,7 @@ import {
 	cleanupMerged,
 	commitWorktree,
 	createWorktree,
+	hasUnmergedWorktreeBranch,
 	removeWorktree,
 	repoRoot,
 	type Worktree,
@@ -424,6 +425,8 @@ interface ResumeInput {
 	sessionFile: string;
 	branch?: string;
 	message: string;
+	/** A continuation without a model override must not silently switch providers. */
+	expectedModel?: { provider: string; id: string };
 }
 
 interface ChildEventState {
@@ -931,7 +934,15 @@ export class SubagentManager {
 
 		let model: Model<Api> | undefined;
 		try {
-			model = resolveChildModel(ctx, chooseModel(file, input.model).requested);
+			model = resolveChildModel(ctx, resume ? input.model : chooseModel(file, input.model).requested);
+			if (
+				resume?.expectedModel &&
+				(model?.provider !== resume.expectedModel.provider || model.id !== resume.expectedModel.id)
+			) {
+				throw new Error(
+					`Original model ${resume.expectedModel.provider}/${resume.expectedModel.id} is unavailable; pass an explicit model override to resume.`,
+				);
+			}
 			validateThinking(model, thinking);
 
 			const checked = await ensureUsableModel(ctx, model, signal);
@@ -954,7 +965,11 @@ export class SubagentManager {
 		}
 
 		let wt: Worktree | undefined;
+		let releaseClaim: (() => void) | undefined;
 		let isolationReason: string | undefined;
+		if (canWrite && resume && task.isolation === "worktree" && !resume.branch) {
+			throw new Error(`Cannot resume ${task.id}: original worktree branch is missing. No in-place fallback.`);
+		}
 		if (canWrite && resume?.branch) {
 			try {
 				wt = attachWorktree(task.cwd, resume.branch);
@@ -962,7 +977,8 @@ export class SubagentManager {
 			} catch (err) {
 				isolationReason = `git worktree add failed: ${err instanceof Error ? err.message : String(err)}`;
 			}
-		} else if (canWrite) {
+			if (!wt) throw new Error(`Cannot resume ${task.id}: ${isolationReason}. No in-place fallback.`);
+		} else if (canWrite && !resume) {
 			try {
 				const upstream = (task.needs ?? [])
 					.map((id) => run.tasks.find((t) => t.id === id))
@@ -1000,7 +1016,23 @@ export class SubagentManager {
 			task.isolationReason = wt ? undefined : (isolationReason ?? "worktree unavailable");
 		}
 		if (wt) {
-			claimWorktree(wt);
+			try {
+				releaseClaim = claimWorktree(wt);
+			} catch (err) {
+				this.updateTask(
+					run,
+					task,
+					{
+						status: "failed",
+						error: err instanceof Error ? err.message : String(err),
+						endedAt: Date.now(),
+					},
+					ctx,
+					onUpdate,
+				);
+				return;
+			}
+			task.branch = wt.branch;
 			this.liveWorktrees.set(`${run.id}:${task.id}`, wt);
 		}
 
@@ -1065,6 +1097,9 @@ export class SubagentManager {
 				customTools,
 			});
 			child = created.session;
+			if (resume && task.sessionId && child.sessionId !== task.sessionId) {
+				throw new Error(`Child session identity changed while resuming ${task.id}; no prompt was sent.`);
+			}
 			child.setSessionName?.(`subagent: ${task.agent}`);
 			this.updateTask(
 				run,
@@ -1120,6 +1155,7 @@ export class SubagentManager {
 			});
 
 			const maxRuntimeMs = input.maxRuntimeMs ?? (this.autoLimit ? DEFAULT_RUNTIME_MS : UNLIMITED_RUNTIME_MS);
+			if (resume) task.finalText = undefined;
 			const promptPromise = child.prompt(resume?.message ?? task.task, { source: "extension" });
 			const races: Promise<unknown>[] = [promptPromise, childFailurePromise, childEndPromise];
 			if (maxRuntimeMs > 0) {
@@ -1240,6 +1276,7 @@ export class SubagentManager {
 				}
 			}
 			if (wt && !keepWorktreeDir) removeWorktree(wt);
+			releaseClaim?.();
 
 			this.liveWorktrees.delete(key);
 		}
@@ -1561,7 +1598,10 @@ export class SubagentManager {
 		if (!run || !task) return { ok: false, reason: `Unknown ${runId}/${taskId}.` };
 		if (!TERMINAL.includes(task.status))
 			return { ok: false, reason: `${taskId} is still ${task.status} — use steer_subagent.` };
-		if (task.status === "completed") return { ok: false, reason: `${taskId} completed — spawn a new task instead.` };
+		const completed = task.status === "completed";
+		if (completed && !opts.message?.trim()) {
+			return { ok: false, reason: `${taskId} completed. Pass a new message describing what to do next.` };
+		}
 		if (!task.sessionFile || !existsSync(task.sessionFile)) {
 			return { ok: false, reason: `${taskId} has no session file to resume (never started) — respawn it.` };
 		}
@@ -1571,15 +1611,79 @@ export class SubagentManager {
 			return { ok: false, reason: `Run ${runId} is still ${run.status} — wait for it to settle before resuming.` };
 		}
 
+		if (!task.sessionId) return { ok: false, reason: `${taskId} has no recorded session identity. Start a new task.` };
+		try {
+			// Pi silently skips malformed JSONL and initializes an empty file as a new session.
+			const content = readFileSync(task.sessionFile, "utf8");
+			if (!content.trim()) throw new Error("the child session file is empty");
+			for (const line of content.split("\n")) {
+				if (!line.trim()) continue;
+				try {
+					JSON.parse(line);
+				} catch (error) {
+					throw new Error("malformed child session JSONL", { cause: error });
+				}
+			}
+			const saved = SessionManager.open(task.sessionFile, undefined, task.cwd);
+			if (saved.getSessionId() !== task.sessionId)
+				throw new Error("the child session ID does not match recorded session identity");
+			const parentFile = getParentSessionFile(ctx);
+			if (parentFile && safeRealPath(saved.getHeader()?.parentSession ?? "") !== safeRealPath(parentFile)) {
+				throw new Error("the child session belongs to a different parent session");
+			}
+			if (!saved.getBranch().some((entry) => entry.type === "message" && entry.message.role === "user")) {
+				throw new Error("the child session has no prior conversation");
+			}
+		} catch (err) {
+			return {
+				ok: false,
+				reason: `Cannot continue ${taskId}: ${err instanceof Error ? err.message : String(err)}. Start a new task.`,
+			};
+		}
+
 		const tools = task.tools?.filter((t) => !(CHILD_TALK_TOOLS as readonly string[]).includes(t));
+		if (!tools?.length) return { ok: false, reason: `${taskId} has no recorded tool allowance. Start a new task.` };
 		const write = tools?.some((t) => WRITE_CAPABLE.includes(t)) ?? false;
+		if (task.isolation === "worktree" && !write) {
+			return { ok: false, reason: `${taskId} has a worktree but no recorded write tools. Start a new task.` };
+		}
+		if (task.isolation === "worktree" || task.branch) {
+			if (!task.branch || !hasUnmergedWorktreeBranch(task.cwd, task.branch)) {
+				return {
+					ok: false,
+					reason: `${taskId}'s original worktree branch is missing or merged. Start a new task; no in-place fallback.`,
+				};
+			}
+		} else if (write && task.isolation !== "in-place") {
+			return {
+				ok: false,
+				reason: `${taskId} has no recorded write isolation. Start a new task; no in-place fallback.`,
+			};
+		}
 		// Resume is a second way to start a run, so the explicit-model contract is enforced here too:
 		// a settled task with no recorded model must not silently inherit the session model.
-		const resumedModel = opts.model ?? task.model;
+		if (completed && !opts.model && (!task.provider || !task.model)) {
+			return { ok: false, reason: `${taskId} has no recorded provider/model. Pass an explicit model to continue.` };
+		}
+		const resumedModel = opts.model ?? (task.provider && task.model ? `${task.provider}/${task.model}` : task.model);
 		if (!resumedModel?.trim()) {
 			return {
 				ok: false,
 				reason: `${taskId} has no model recorded and none was supplied. Pass \`model: "<provider>/<id>"\` to resume — there is no default model.${modelHint(ctx)}`,
+			};
+		}
+		try {
+			const model = resolveChildModel(ctx, resumedModel);
+			if (!opts.model && task.provider && (model?.provider !== task.provider || model.id !== task.model)) {
+				throw new Error(
+					`Original model ${task.provider}/${task.model} is unavailable; pass an explicit model override.`,
+				);
+			}
+			validateThinking(model, task.thinking);
+		} catch (err) {
+			return {
+				ok: false,
+				reason: `Cannot continue ${taskId}: ${err instanceof Error ? err.message : String(err)}`,
 			};
 		}
 		const input: TaskInput = {
@@ -1596,6 +1700,9 @@ export class SubagentManager {
 		const resume: ResumeInput = {
 			sessionFile: task.sessionFile,
 			branch: task.branch,
+			...(opts.model || !task.provider || !task.model
+				? {}
+				: { expectedModel: { provider: task.provider, id: task.model } }),
 			message:
 				opts.message?.trim() ||
 				`Your previous turn ended with an error (${task.error ?? "unknown"}). Resume where you left off: briefly recap what you already did and what remains, then continue and finish the original task.`,
@@ -1607,7 +1714,6 @@ export class SubagentManager {
 			status: "queued" as TaskStatus,
 			error: undefined,
 			endedAt: undefined,
-			finalText: undefined,
 			notifiedParent: false,
 			diffStat: undefined,
 			changedFiles: undefined,

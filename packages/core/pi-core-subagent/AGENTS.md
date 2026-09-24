@@ -50,8 +50,8 @@ correctness, disable it here and say why. Keep the file `.jsonc` — the comment
   `manager → schemas → manager` cycles appear and break every test at module load.
 - Model display has one owner: `modelTag()` in `format.ts`. Do not interpolate the model a second
   time in a render path.
-- Model precedence has one owner: `chooseModel()` in `manager.ts`. Spawn and resume both route
-  through it; re-deriving the rule is how resume once bypassed the required-model guard.
+- Spawn model precedence has one owner: `chooseModel()` in `manager.ts`. Resume uses the recorded
+  provider/model (or an explicit override), not a changed agent file or the leader's model.
 - Tool-allowance precedence has one owner: `chooseToolAllowance()` in `manager.ts`. Both the
   createRun gate and `resolveToolset()` read it, so the toolset a child receives cannot disagree
   with the allowance that was checked. A new entry point must call it, not re-derive it.
@@ -63,6 +63,8 @@ correctness, disable it here and say why. Keep the file `.jsonc` — the comment
   typed `satisfies readonly ModelThinkingLevel[]` so upstream drift is a compile error.
 - A tool that must report failure has to **throw**: the tool loop returns
   `{ isError: false }` for any `execute` that does not throw, discarding a returned `isError: true`.
+- `SessionManager.open()` creates a new session from an empty JSONL and skips malformed lines;
+  continuation checks the JSONL, session ID, and parent before prompting.
 - Every subagent task must name a `model`; there is no default. The error names passable
   references. Keep it that way — an inherited session model makes "which model ran" unknowable.
 - Every subagent task must also **state its tool allowance** — `write: true`, `write: false`, or
@@ -70,8 +72,8 @@ correctness, disable it here and say why. Keep the file `.jsonc` — the comment
   owner: `chooseToolAllowance()` in `manager.ts`, read by the spawn gate and by `resolveToolset()`.
   An empty `tools: []` counts as unstated. The gate runs **after** the model checks so the model
   contract keeps reporting first, and both checks **collect every offender** before throwing — one
-  call reports every unfixed task, not just the first. Resume is safe without a gate of its own
-  because it always reconstructs a boolean `write` from the recorded tools.
+  call reports every unfixed task, not just the first. `resumeTask()` separately validates saved
+  tools and worktree isolation before continuing; see `README.md` under "Continuing a child".
 - Refusal message shape has one owner: `describeProblems()` in `manager.ts`. One offender renders in
   the single-task form followed by a space; several render as a numbered block followed by a newline.
   Both forms end ready for a caller to concatenate a shared tail, which is what keeps the

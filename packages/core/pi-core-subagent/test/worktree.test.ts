@@ -205,6 +205,17 @@ describe("worktree", () => {
 		expect(git(["show", "--name-only", "--format=", wt.branch])).toContain("live.txt");
 	});
 
+	test("a second claim cannot overwrite a live worktree owner's receipt", () => {
+		const wt = createWorktree(repo, "run_claim", "task_claim")!;
+		try {
+			claimWorktree(wt);
+			const receipt = readFileSync(`${wt.path}.owner`, "utf8");
+			expect(() => claimWorktree(wt)).toThrow(/owned|claim/i);
+			expect(readFileSync(`${wt.path}.owner`, "utf8")).toBe(receipt);
+		} finally {
+			removeWorktree(wt);
+		}
+	});
 	test("claimed worktree does not commit its owner marker into the branch", () => {
 		const wt = createWorktree(repo, "run_mark", "task_mark")!;
 		claimWorktree(wt);
@@ -293,6 +304,19 @@ describe("attachWorktree", () => {
 
 		expect(attachWorktree(repo, again.branch)!.path).toBe(again.path);
 		removeWorktree(again);
+	});
+	test("refuses a registered checkout whose HEAD moved off the original branch", async () => {
+		const { attachWorktree } = await import("../src/worktree.ts");
+		const wt = createWorktree(repo, "run_moved", "task_moved")!;
+		try {
+			writeFileSync(join(wt.path, "moved.txt"), "original\n");
+			commitWorktree(wt, "unmerged child work");
+			git(["switch", "--detach", "main"], wt.path);
+			expect(() => attachWorktree(repo, wt.branch)).toThrow(/HEAD.*expected|checkout.*branch/);
+			expect(git(["rev-parse", "HEAD"], wt.path)).toBe(git(["rev-parse", "HEAD"]));
+		} finally {
+			removeWorktree(wt);
+		}
 	});
 	test("refuses unknown branch and non-subagent prefix", async () => {
 		const { attachWorktree } = await import("../src/worktree.ts");
