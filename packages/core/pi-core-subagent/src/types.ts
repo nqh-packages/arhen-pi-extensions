@@ -102,6 +102,12 @@ export interface ModelCatalog {
 	models: SelectableModel[];
 	/** Pi resolves `enabledModels` and `--models` into the session scope. */
 	scope: "session" | "all";
+	/** A user-configured suggestion, only when it is an entry Pi listed for this session. */
+	preferredDefault?: string;
+	/** User-owned catalog guidance. It never supplies a model to a task. */
+	advisory?: string;
+	/** A non-fatal catalog-advice configuration issue, shown so it is not silently ignored. */
+	configError?: string;
 	/** References that are NOT safe to pass because another model's bare id would win resolution. */
 	ambiguous?: string[];
 	/** Why the ambiguous references are unsafe, in full, so the agent can act instead of retrying blindly. */

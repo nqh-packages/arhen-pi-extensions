@@ -292,12 +292,21 @@ export function renderModelCatalog(catalog: ModelCatalog): {
 		? `\n\nDo not pass these references: ${catalog.ambiguous.join(", ")}. ${catalog.reason}`
 		: "";
 	const faults = catalog.unresolved?.length ? `\n\n${catalog.unresolvedReason}` : "";
+	const suggested = catalog.preferredDefault
+		? `\n\nSuggested model: \`${catalog.preferredDefault}\`. This is advisory; pass \`model\` explicitly for every task.`
+		: "";
+	const advisory = catalog.advisory ? `\n\nNote: ${catalog.advisory}` : "";
+	const configError = catalog.configError
+		? `\n\nWARNING: catalog advice could not be used (${catalog.configError}).`
+		: "";
 	const heading =
 		catalog.scope === "session"
 			? `Enabled subagent models (${catalog.models.length}):`
 			: `Available subagent models (${catalog.models.length}):`;
 	return {
-		content: [{ type: "text", text: `${heading}\n${lines.join("\n")}${caution}${faults}` }],
+		content: [
+			{ type: "text", text: `${heading}\n${lines.join("\n")}${suggested}${advisory}${caution}${faults}${configError}` },
+		],
 		details: catalog,
 	};
 }
