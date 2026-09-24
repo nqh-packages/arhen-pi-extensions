@@ -60,7 +60,7 @@ A `post-checkout` hook warns when the checked-out code loses the fix. The hook
 lives in `.git/hooks/` and is not tracked by git, so it must be re-created after a
 fresh clone.
 
-Verify at any time (expect 4 lines):
+Verify at any time (the `sendNotice` helper should use `deliverAs: "steer"`):
 
 ```sh
 grep -n 'deliverAs: "steer"' \

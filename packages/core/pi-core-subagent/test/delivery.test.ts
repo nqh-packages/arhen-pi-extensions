@@ -13,11 +13,17 @@ type Kind = "completed" | "failed" | "aborted";
  */
 describe("all lifecycle notices steer", () => {
 	function capture(task: Partial<TaskSnapshot>, kind: Kind) {
-		const sent: { body: string; deliverAs?: string }[] = [];
+		const sent: {
+			message: { customType: string; content: string; display: boolean };
+			options?: { triggerTurn?: boolean; deliverAs?: string };
+		}[] = [];
 		const pi = {
 			events: { emit() {} },
-			sendUserMessage(body: string, opts?: { deliverAs?: string }) {
-				sent.push({ body, deliverAs: opts?.deliverAs });
+			sendMessage(
+				message: { customType: string; content: string; display: boolean },
+				options?: { triggerTurn?: boolean; deliverAs?: string },
+			) {
+				sent.push({ message, options });
 			},
 		} as unknown as ExtensionAPI;
 
@@ -40,18 +46,28 @@ describe("all lifecycle notices steer", () => {
 		return sent[0];
 	}
 
-	test("a task that died mid-work steers, so the leader stops instead of using a broken result", () => {
+	test("a failed task remains visible to the leader as a subagent notice", () => {
 		const notice = capture({ finalText: "half done", error: "429 rate limited" }, "failed");
-		expect(notice?.deliverAs).toBe("steer");
-		expect(notice?.body).toContain("resume_subagent");
+		expect(notice?.message).toMatchObject({ customType: "subagent", display: true });
+		expect(notice?.message.content).toContain("resume_subagent");
+		expect(notice?.options).toEqual({ triggerTurn: true, deliverAs: "steer" });
 	});
 
-	test("a never-started task steers too (config error repeats on every respawn)", () => {
-		expect(capture({ finalText: "", error: "Model not found: nope/x" }, "failed")?.deliverAs).toBe("steer");
+	test("a never-started task also wakes the leader", () => {
+		expect(capture({ finalText: "", error: "Model not found: nope/x" }, "failed")?.options).toEqual({
+			triggerTurn: true,
+			deliverAs: "steer",
+		});
 	});
 
-	test("completed and aborted steer as well, so the leader sees them mid-turn", () => {
-		expect(capture({ finalText: "done" }, "completed")?.deliverAs).toBe("steer");
-		expect(capture({ error: "cancelled" }, "aborted")?.deliverAs).toBe("steer");
+	test("completed and aborted tasks are subagent messages that steer", () => {
+		for (const [task, kind] of [
+			[{ finalText: "done" }, "completed"],
+			[{ error: "cancelled" }, "aborted"],
+		] as const) {
+			const notice = capture(task, kind);
+			expect(notice?.message).toMatchObject({ customType: "subagent", display: true });
+			expect(notice?.options).toEqual({ triggerTurn: true, deliverAs: "steer" });
+		}
 	});
 });
