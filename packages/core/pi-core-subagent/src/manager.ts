@@ -632,11 +632,13 @@ export class SubagentManager {
 		this.pi.events.emit(type, { type, timestamp: Date.now(), ...payload });
 	}
 
-	private deliverMode(): "steer" {
-		// Every child->leader message steers. `followUp` only surfaces once the leader stops calling
-		// tools, so a leader that keeps working (or never rests) sees completions too late to act on
-		// them, and the queue accumulates in the meantime. `steer` lands at the next model boundary.
-		return "steer";
+	private sendNotice(body: string): void {
+		// Distinguish subagents from the user in session history. Trigger a turn when idle and
+		// steer mid-turn so a busy leader sees completions at the next model boundary.
+		this.pi.sendMessage(
+			{ customType: "subagent", content: body, display: true },
+			{ triggerTurn: true, deliverAs: "steer" },
+		);
 	}
 
 	private notifyTask(run: RunSnapshot, task: TaskSnapshot, kind: "completed" | "failed" | "aborted"): void {
@@ -651,7 +653,7 @@ export class SubagentManager {
 			return;
 		}
 		try {
-			this.pi.sendUserMessage(body, { deliverAs: this.deliverMode() });
+			this.sendNotice(body);
 		} catch {}
 		this.emit("subagent:notification", { runId: run.id, taskId: task.id, kind, body });
 	}
@@ -669,7 +671,7 @@ export class SubagentManager {
 				? `A subagent is asking you a question (task ${extra?.taskId}): ${extra?.question ?? ""}\nReply with reply_subagent(runId: "${run.id}", taskId: "${extra?.taskId}", message: ...).`
 				: makeNotice(run, kind);
 		try {
-			this.pi.sendUserMessage(body, { deliverAs: "steer" });
+			this.sendNotice(body);
 		} catch {}
 		this.emit("subagent:notification", { runId: run.id, kind, body });
 	}
@@ -792,7 +794,7 @@ export class SubagentManager {
 
 				if (this.collectParked(run.id, { kind: "notify", taskId: task.id, agent: task.agent, text: message })) return;
 				try {
-					this.pi.sendUserMessage(`[Subagent ${task.agent}] ${message}`, { deliverAs: "steer" });
+					this.sendNotice(`[Subagent ${task.agent}] ${message}`);
 				} catch {}
 			},
 			onSendMessage: (_taskId, to, text) => {
@@ -806,7 +808,7 @@ export class SubagentManager {
 					});
 					if (this.collectParked(run.id, { kind: "notify", taskId: task.id, agent: task.agent, text })) return true;
 					try {
-						this.pi.sendUserMessage(`[Subagent ${task.agent}] ${text}`, { deliverAs: "steer" });
+						this.sendNotice(`[Subagent ${task.agent}] ${text}`);
 					} catch {}
 					return true;
 				}
@@ -1147,11 +1149,9 @@ export class SubagentManager {
 				dispose: () => child?.dispose(),
 
 				steer: (message) =>
-					void child?.prompt(message, { streamingBehavior: "steer" }).catch((err) =>
-						this.pi.sendUserMessage(`[steer_subagent] ${err instanceof Error ? err.message : String(err)}`, {
-							deliverAs: "steer",
-						}),
-					),
+					void child
+						?.prompt(message, { streamingBehavior: "steer" })
+						.catch((err) => this.sendNotice(`[steer_subagent] ${err instanceof Error ? err.message : String(err)}`)),
 			});
 
 			const maxRuntimeMs = input.maxRuntimeMs ?? (this.autoLimit ? DEFAULT_RUNTIME_MS : UNLIMITED_RUNTIME_MS);
