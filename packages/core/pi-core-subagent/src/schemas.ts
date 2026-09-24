@@ -18,9 +18,9 @@ const THINKING_LEVELS = [
 ] as const satisfies readonly ModelThinkingLevel[];
 const TaskItem = Type.Object({
 	id: Type.Optional(Type.String({ description: "Optional stable task id" })),
-	agent: Type.String({ minLength: 1, description: "Agent name you invent (defined inline via `prompt`)" }),
-	task: Type.String({ minLength: 1, description: "Task for this agent" }),
-	prompt: Type.Optional(Type.String({ description: "System prompt defining this agent's behavior" })),
+	agent: Type.String({ minLength: 1, description: "Agent name you invent" }),
+	task: Type.String({ minLength: 1, description: "Required work request for this agent; do not put it in `prompt`" }),
+	prompt: Type.Optional(Type.String({ description: "Optional system instructions for this agent, not its task" })),
 	write: Type.Optional(
 		Type.Boolean({
 			description:
@@ -44,15 +44,15 @@ const TaskItem = Type.Object({
 	maxRuntimeMs: Type.Optional(Type.Number({ description: "Per-task timeout (ms)" })),
 	needs: Type.Optional(
 		Type.Array(Type.String(), {
-			description: "Ids of tasks this one waits for; their outputs are prepended to this prompt.",
+			description: "Ids of upstream tasks; their outputs are prepended to this task.",
 		}),
 	),
 });
 
 export const SubagentParams = Type.Object({
 	agent: Type.Optional(Type.String({ minLength: 1, description: "Name you invent for this subagent (single mode)" })),
-	task: Type.Optional(Type.String({ minLength: 1, description: "Task (single mode)" })),
-	prompt: Type.Optional(Type.String({ description: "System prompt for this agent (single mode)" })),
+	task: Type.Optional(Type.String({ minLength: 1, description: "Work request (required in single mode)" })),
+	prompt: Type.Optional(Type.String({ description: "Optional system instructions, not the task (single mode)" })),
 	write: Type.Optional(
 		Type.Boolean({
 			description:

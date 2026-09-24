@@ -36,7 +36,7 @@ flowchart LR
     end
     api -- "route map" --> gate
     db -- "schema map" --> gate
-    gate -- "both outputs<br/>prepended to the prompt" --> doc
+    gate -- "both outputs<br/>prepended to the task" --> doc
 ```
 
 ![Subagents widget](docs/subagents-widget.png)
@@ -46,7 +46,7 @@ flowchart LR
 ## Design principles
 
 - **The delegation is the graph.** `needs` declares edges; the scheduler runs each wave of ready tasks in parallel and gates the rest. One code path for single, parallel, chain and graph — `chain` is just `needs: [previous]`. ([why](#why-waves-instead-of-more-agents))
-- **Edges carry data, not just order.** An upstream task's output is prepended to its dependents' prompts automatically. The coordinator cannot forget to pass it, because it never passes it.
+- **Edges carry data, not just order.** An upstream task's output is prepended to its dependents' task text automatically. The coordinator cannot forget to pass it, because it never passes it.
 - **A bad graph fails before it spawns.** Unknown ids, self-edges and cycles are rejected at call time — never halfway through a run with three children already burning tokens.
 - **Proof is an exit code, never a self-report.** Tasks are asked for a runnable `Verify:` command; the leader checks `git diff --stat`. Agents auditing their own work score ~0. ([why](#why-9-is-a-verification-command-not-a-self-report))
 - **No ceremony without edges.** Six independent reviewers stay six independent reviewers — no waves, no gates, no graph vocabulary imposed on flat work.
@@ -87,10 +87,9 @@ Define agents inline per call, or reference a named agent file (see [Agent files
 ```json
 {
   "agent": "api-reviewer",
-  "prompt": "You are a strict API reviewer. Check auth, rate limiting, and error handling. Cite file:line.",
+  "task": "Review src/api/upload.ts for auth, rate limiting, and error handling. Cite file:line.",
   "model": "anthropic/claude-sonnet-4-6",
-  "write": false,
-  "task": "Review src/api/upload.ts"
+  "write": false
 }
 ```
 
@@ -99,8 +98,8 @@ Parallel — mixed toolsets, siblings can talk via mailbox (intercom is always o
 ```json
 {
   "tasks": [
-    { "agent": "researcher", "prompt": "You find facts. Cite paths.", "task": "Map the auth flow", "write": false, "model": "anthropic/claude-sonnet-4-6" },
-    { "agent": "implementer", "prompt": "You make minimal changes.", "task": "Implement POST /api/upload", "write": true, "model": "anthropic/claude-sonnet-4-6" }
+    { "agent": "researcher", "task": "Map the auth flow. Cite paths.", "write": false, "model": "anthropic/claude-sonnet-4-6" },
+    { "agent": "implementer", "task": "Implement POST /api/upload with minimal changes", "write": true, "model": "anthropic/claude-sonnet-4-6" }
   ]
 }
 ```
@@ -110,8 +109,8 @@ Chain — `{previous}` is replaced with the prior agent's output:
 ```json
 {
   "chain": [
-    { "agent": "planner", "prompt": "You write a step list.", "task": "Plan the change", "write": false, "model": "anthropic/claude-sonnet-4-6" },
-    { "agent": "doer", "prompt": "You follow the plan exactly.", "task": "Execute: {previous}", "write": true, "model": "anthropic/claude-sonnet-4-6" }
+    { "agent": "planner", "task": "Plan the change", "write": false, "model": "anthropic/claude-sonnet-4-6" },
+    { "agent": "doer", "task": "Execute: {previous}", "write": true, "model": "anthropic/claude-sonnet-4-6" }
   ]
 }
 ```
@@ -232,7 +231,7 @@ sequenceDiagram
     S->>W: ## Output of api<br/>&lt;route map&gt;<br/><br/>## Output of db<br/>&lt;schema map&gt;<br/>---<br/>"Write ARCHITECTURE.md…"
 ```
 
-The leader never copies those outputs into the prompt — so it cannot forget to.
+The leader never copies those outputs into the task — so it cannot forget to.
 
 ### One scheduler, four shapes
 
@@ -293,10 +292,9 @@ Background (default) + intercom — the run returns a runId immediately; you sta
 ```json
 {
   "agent": "auditor",
-  "prompt": "You audit dependencies.",
+  "task": "Audit package.json for outdated deps",
   "model": "anthropic/claude-sonnet-4-6",
-  "write": false,
-  "task": "Audit package.json for outdated deps"
+  "write": false
 }
 ```
 
